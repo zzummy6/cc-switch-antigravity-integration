@@ -15,12 +15,12 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 
+use super::antigravity_secure_store as secure_store;
 use super::copilot_auth::GitHubDeviceCodeResponse;
 
 /// Default Antigravity desktop client (non GCP-TOS accounts).
@@ -193,6 +193,9 @@ struct PendingLogin {
     client_id: String,
     client_secret: String,
     redirect_uri: String,
+    /// PKCE（RFC 7636 S256）。Google 官方 loopback 流不带 PKCE，但接受；
+    /// 若上游拒绝（invalid_grant 提及 verifier/challenge）自动降级为无 PKCE 重放。
+    code_verifier: Option<String>,
     started_at_ms: i64,
     outcome: Arc<Mutex<Option<LoginOutcome>>>,
     /// Abort handle for the loopback server task.
@@ -218,8 +221,20 @@ impl AntigravityOAuthManager {
             refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             pending_logins: Arc::new(RwLock::new(HashMap::new())),
             mutation_lock: Arc::new(Mutex::new(())),
-            storage_path: data_dir.join("antigravity_oauth_auth.json"),
+            storage_path: secure_store::encrypted_path_for(
+                &data_dir.join("antigravity_oauth_auth.json"),
+            ),
         };
+
+        // 一次性迁移旧明文 JSON（Phase 3 安全要求：token 禁止明文落盘）
+        let legacy_json = data_dir.join("antigravity_oauth_auth.json");
+        match secure_store::migrate_legacy_plaintext(&legacy_json) {
+            Ok(Some(_)) => {
+                // 迁移成功，content 已写入 .bin，继续正常加载
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("[AntigravityOAuth] 明文凭据迁移失败: {error}"),
+        }
 
         if let Err(error) = manager.load_from_disk_sync() {
             log::warn!("[AntigravityOAuth] 加载存储失败: {error}");
@@ -243,6 +258,9 @@ impl AntigravityOAuthManager {
             .port();
         let redirect_uri = format!("http://localhost:{port}{OAUTH_CALLBACK_PATH}");
 
+        let code_verifier = new_code_verifier();
+        let code_challenge = pkce_s256_challenge(&code_verifier);
+
         let scopes = [
             SCOPE_CLOUD_PLATFORM,
             SCOPE_USERINFO_EMAIL,
@@ -252,15 +270,17 @@ impl AntigravityOAuthManager {
         ]
         .join(" ");
 
-        let query = [
-            ("client_id", ANTIGRAVITY_CLIENT_ID),
-            ("redirect_uri", redirect_uri.as_str()),
-            ("response_type", "code"),
-            ("scope", scopes.as_str()),
-            ("access_type", "offline"),
-            ("prompt", "consent"),
-            ("state", state.as_str()),
+        let mut query = vec![
+            ("client_id", ANTIGRAVITY_CLIENT_ID.to_string()),
+            ("redirect_uri", redirect_uri.clone()),
+            ("response_type", "code".to_string()),
+            ("scope", scopes.clone()),
+            ("access_type", "offline".to_string()),
+            ("prompt", "consent".to_string()),
+            ("state", state.clone()),
         ];
+        query.push(("code_challenge", code_challenge));
+        query.push(("code_challenge_method", "S256".to_string()));
         let login_url = reqwest::Url::parse_with_params(GOOGLE_AUTH_URL, &query)
             .map_err(|error| AntigravityOAuthError::ParseError(error.to_string()))?
             .to_string();
@@ -270,6 +290,7 @@ impl AntigravityOAuthManager {
             client_id: ANTIGRAVITY_CLIENT_ID.to_string(),
             client_secret: ANTIGRAVITY_CLIENT_SECRET.to_string(),
             redirect_uri: redirect_uri.clone(),
+            code_verifier: Some(code_verifier),
             started_at_ms: chrono::Utc::now().timestamp_millis(),
             outcome: Arc::new(Mutex::new(None)),
             shutdown: Arc::new(tokio::sync::Notify::new()),
@@ -337,9 +358,52 @@ impl AntigravityOAuthManager {
         match outcome {
             LoginOutcome::Failed { error } => Err(error),
             LoginOutcome::Authorized { code } => {
-                let tokens = self
-                    .exchange_code(&code, &pending.client_id, &pending.client_secret, &pending.redirect_uri)
-                    .await?;
+                // PKCE 优先；上游拒绝 verifier（invalid_grant）时降级为无 PKCE 重试
+                let tokens = if let Some(verifier) = pending.code_verifier.clone() {
+                    match self
+                        .exchange_code_with_verifier(
+                            &code,
+                            &pending.client_id,
+                            &pending.client_secret,
+                            &pending.redirect_uri,
+                            Some(&verifier),
+                        )
+                        .await
+                    {
+                        Ok(tokens) => tokens,
+                        Err(error @ AntigravityOAuthError::TokenFetchFailed(_)) => {
+                            let downgrade = matches!(
+                                &error,
+                                AntigravityOAuthError::TokenFetchFailed(message)
+                                    if message.contains("invalid_grant")
+                            );
+                            if !downgrade {
+                                return Err(error);
+                            }
+                            log::warn!(
+                                "[AntigravityOAuth] PKCE 被上游拒绝，降级为无 PKCE 重试"
+                            );
+                            self.exchange_code_with_verifier(
+                                &code,
+                                &pending.client_id,
+                                &pending.client_secret,
+                                &pending.redirect_uri,
+                                None,
+                            )
+                            .await?
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    self.exchange_code_with_verifier(
+                        &code,
+                        &pending.client_id,
+                        &pending.client_secret,
+                        &pending.redirect_uri,
+                        None,
+                    )
+                    .await?
+                };
                 let refresh_token = tokens
                     .refresh_token
                     .as_deref()
@@ -479,6 +543,12 @@ impl AntigravityOAuthManager {
             .await
     }
 
+    /// 401 后强制失效内存缓存；下次 `get_valid_token_for_account` 会走 refresh。
+    /// 由 forwarder 的 401 retry-once 路径调用。
+    pub async fn invalidate_access_token(&self, account_id: &str) {
+        self.access_tokens.write().await.remove(account_id);
+    }
+
     pub async fn clear_auth(&self) -> Result<(), AntigravityOAuthError> {
         let _mutation_guard = self.mutation_lock.lock().await;
         if self.storage_path.exists() {
@@ -494,22 +564,27 @@ impl AntigravityOAuthManager {
         Ok(())
     }
 
-    async fn exchange_code(
+    async fn exchange_code_with_verifier(
         &self,
         code: &str,
         client_id: &str,
         client_secret: &str,
         redirect_uri: &str,
+        code_verifier: Option<&str>,
     ) -> Result<OAuthTokenResponse, AntigravityOAuthError> {
+        let mut form = vec![
+            ("grant_type", "authorization_code".to_string()),
+            ("code", code.to_string()),
+            ("redirect_uri", redirect_uri.to_string()),
+            ("client_id", client_id.to_string()),
+            ("client_secret", client_secret.to_string()),
+        ];
+        if let Some(verifier) = code_verifier {
+            form.push(("code_verifier", verifier.to_string()));
+        }
         let response = crate::proxy::http_client::get()
             .post(GOOGLE_TOKEN_URL)
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("code", code),
-                ("redirect_uri", redirect_uri),
-                ("client_id", client_id),
-                ("client_secret", client_secret),
-            ])
+            .form(&form)
             .send()
             .await?;
         let status = response.status();
@@ -675,7 +750,8 @@ impl AntigravityOAuthManager {
         };
         let content = serde_json::to_string_pretty(&store)
             .map_err(|error| AntigravityOAuthError::ParseError(error.to_string()))?;
-        self.write_store_atomic(&content)?;
+        secure_store::write_secure(&self.storage_path, &content)
+            .map_err(|error| AntigravityOAuthError::IoError(error.to_string()))?;
         *self.accounts.write().await = accounts;
         *self.default_account_id.write().await = default_account_id;
         Ok(())
@@ -774,10 +850,11 @@ impl AntigravityOAuthManager {
     }
 
     fn load_from_disk_sync(&self) -> Result<(), AntigravityOAuthError> {
-        if !self.storage_path.exists() {
+        let Some(content) = secure_store::read_secure(&self.storage_path)
+            .map_err(|error| AntigravityOAuthError::IoError(error.to_string()))?
+        else {
             return Ok(());
-        }
-        let content = fs::read_to_string(&self.storage_path)?;
+        };
         let store: AntigravityOAuthStore = serde_json::from_str(&content)
             .map_err(|error| AntigravityOAuthError::ParseError(error.to_string()))?;
         if let Ok(mut accounts) = self.accounts.try_write() {
@@ -789,66 +866,6 @@ impl AntigravityOAuthManager {
         Ok(())
     }
 
-    fn write_store_atomic(&self, content: &str) -> Result<(), AntigravityOAuthError> {
-        let parent = self
-            .storage_path
-            .parent()
-            .ok_or_else(|| AntigravityOAuthError::IoError("无效的存储路径".to_string()))?;
-        fs::create_dir_all(parent)?;
-        let file_name = self
-            .storage_path
-            .file_name()
-            .ok_or_else(|| AntigravityOAuthError::IoError("无效的存储文件名".to_string()))?
-            .to_string_lossy();
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let temporary_path = parent.join(format!("{file_name}.tmp.{nonce}"));
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let result = (|| -> Result<(), std::io::Error> {
-                let mut file = fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .mode(0o600)
-                    .open(&temporary_path)?;
-                file.write_all(content.as_bytes())?;
-                file.flush()?;
-                fs::rename(&temporary_path, &self.storage_path)?;
-                fs::set_permissions(&self.storage_path, fs::Permissions::from_mode(0o600))?;
-                Ok(())
-            })();
-            if result.is_err() {
-                let _ = fs::remove_file(&temporary_path);
-            }
-            result?;
-        }
-
-        #[cfg(windows)]
-        {
-            let result = (|| -> Result<(), std::io::Error> {
-                let mut file = fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&temporary_path)?;
-                file.write_all(content.as_bytes())?;
-                file.flush()?;
-                if self.storage_path.exists() {
-                    fs::remove_file(&self.storage_path)?;
-                }
-                fs::rename(&temporary_path, &self.storage_path)?;
-                Ok(())
-            })();
-            if result.is_err() {
-                let _ = fs::remove_file(&temporary_path);
-            }
-            result?;
-        }
-        Ok(())
-    }
 }
 
 struct LoopbackServer {
@@ -1026,6 +1043,25 @@ fn urldecode(value: &str) -> Option<String> {
         }
     }
     String::from_utf8(out).ok()
+}
+
+/// RFC 7636 code_verifier：43-128 个 unreserved 字符。
+/// OsRng 失败时回退到 uuid v4 拼接（仍满足长度与字符集要求）。
+fn new_code_verifier() -> String {
+    use rand::TryRngCore;
+    let mut bytes = [0u8; 32];
+    if rand::rngs::OsRng.try_fill_bytes(&mut bytes).is_ok() {
+        return base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    }
+    uuid::Uuid::new_v4().simple().to_string()
+        + &uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// S256 challenge = BASE64URL(SHA256(verifier)) 无填充
+fn pkce_s256_challenge(verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
 fn compute_expires_at_ms(expires_in: Option<i64>) -> i64 {

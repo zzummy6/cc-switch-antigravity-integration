@@ -1474,7 +1474,10 @@
     "openAuthPage": "Reopen the authorization page",
     "retry": "Retry",
     "logoutAll": "Remove all Antigravity accounts",
-    "loginRequired": "Sign in with a Google account first"
+    "loginRequired": "Sign in with a Google account first",
+    "testing": "Testing…",
+    "test": "Test",
+    "testOk": "OK · {{latency}}ms · reply \"{{reply}}\""
   },
   "managedAuth": {
     "accountRemoved": "Account removed",

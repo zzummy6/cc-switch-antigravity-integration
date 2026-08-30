@@ -128,7 +128,10 @@ describe("AntigravityOAuthSection", () => {
     });
 
     render(<AntigravityOAuthSection />);
-    expect(await screen.findByText("one@example.com")).toBeInTheDocument();
+    // Connected 状态卡与账号列表都会显示默认账号邮箱
+    expect(
+      (await screen.findAllByText("one@example.com")).length,
+    ).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("two@example.com")).toBeInTheDocument();
 
     await userEvent.click(

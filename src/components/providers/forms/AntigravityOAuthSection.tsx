@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAntigravityOauth } from "./hooks/useAntigravityOauth";
+import { testAntigravityConnection } from "@/lib/api/auth";
 
 interface AntigravityOAuthSectionProps {
   className?: string;
@@ -62,6 +63,28 @@ export const AntigravityOAuthSection: React.FC<AntigravityOAuthSectionProps> = (
 
   const usableAccounts = accounts.filter((account) => !account.requires_reauth);
 
+  const [testState, setTestState] = React.useState<
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "ok"; latencyMs: number; sampleReply: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  const runConnectionTest = async () => {
+    setTestState({ kind: "running" });
+    try {
+      const result = await testAntigravityConnection(
+        selectedAccountId ?? defaultAccountId,
+      );
+      setTestState({
+        kind: "ok",
+        latencyMs: result.latencyMs,
+        sampleReply: result.sampleReply,
+      });
+    } catch (error) {
+      setTestState({ kind: "error", message: String(error) });
+    }
+  };
+
   const remove = (accountId: string, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -71,6 +94,48 @@ export const AntigravityOAuthSection: React.FC<AntigravityOAuthSectionProps> = (
 
   return (
     <div className={`space-y-4 ${className ?? ""}`}>
+      {isAuthenticated && (
+        <div className="rounded-lg border border-green-500/40 bg-green-500/5 p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-green-500" />
+              </span>
+              <span className="font-medium">Connected</span>
+              <span className="truncate text-muted-foreground">
+                {defaultAccountId
+                  ? (accounts.find((a) => a.id === defaultAccountId)?.login ??
+                    "")
+                  : ""}
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={testState.kind === "running"}
+              onClick={runConnectionTest}
+            >
+              {testState.kind === "running"
+                ? t("antigravityOauth.testing", "测试中…")
+                : t("antigravityOauth.test", "Test")}
+            </Button>
+          </div>
+          {testState.kind === "ok" && (
+            <p className="mt-2 text-xs text-green-600">
+              {t("antigravityOauth.testOk", {
+                latency: testState.latencyMs,
+                reply: testState.sampleReply,
+                defaultValue: `连通正常 · ${testState.latencyMs}ms · 回复「${testState.sampleReply}」`,
+              })}
+            </p>
+          )}
+          {testState.kind === "error" && (
+            <p className="mt-2 text-xs text-red-500">{testState.message}</p>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <Label>
           {t("antigravityOauth.authStatus", "Antigravity OAuth 认证")}

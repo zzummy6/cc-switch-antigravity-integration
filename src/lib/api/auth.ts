@@ -115,6 +115,21 @@ export async function authLogout(
   });
 }
 
+export interface AntigravityConnectionTest {
+  ok: boolean;
+  latencyMs: number;
+  model: string;
+  sampleReply: string;
+}
+
+export async function testAntigravityConnection(
+  accountId?: string | null,
+): Promise<AntigravityConnectionTest> {
+  return invoke("test_antigravity_oauth_connection", {
+    accountId: accountId || null,
+  });
+}
+
 export const authApi = {
   authStartLogin,
   authPollForAccount,

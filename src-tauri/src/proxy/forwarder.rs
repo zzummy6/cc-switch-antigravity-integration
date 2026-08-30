@@ -527,19 +527,58 @@ impl RequestForwarder {
             }
 
             // 转发请求（每个 Provider 只尝试一次，重试由客户端控制）
-            match self
-                .forward(
-                    app_type,
-                    &method,
-                    provider,
-                    endpoint,
-                    &provider_body,
-                    &headers,
-                    &extensions,
-                    adapter.as_ref(),
-                )
-                .await
-            {
+            // Antigravity 例外：access_token 可能在请求途中被吊销/轮换，
+            // 允许 401 → 强制刷新 → 同 Provider 重试一次（禁无限重试）。
+            let is_antigravity_provider = provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                == Some("antigravity_oauth");
+            let mut antigravity_401_retried = false;
+            let forward_outcome = loop {
+                match self
+                    .forward(
+                        app_type,
+                        &method,
+                        provider,
+                        endpoint,
+                        &provider_body,
+                        &headers,
+                        &extensions,
+                        adapter.as_ref(),
+                    )
+                    .await
+                {
+                    Err(ProxyError::UpstreamError { status: 401, .. })
+                        if is_antigravity_provider && !antigravity_401_retried =>
+                    {
+                        antigravity_401_retried = true;
+                        log::warn!(
+                            "[AntigravityOAuth] 上游 401，刷新 token 后重试一次 (provider={})",
+                            provider.id
+                        );
+                        if let Some(app_handle) = &self.app_handle {
+                            let account_id = provider
+                                .meta
+                                .as_ref()
+                                .and_then(|meta| meta.managed_account_id_for("antigravity_oauth"));
+                            let state = app_handle.state::<AntigravityOAuthState>();
+                            let manager = state.0.read().await;
+                            match account_id {
+                                Some(id) => manager.invalidate_access_token(&id).await,
+                                None => {
+                                    if let Some(id) = manager.default_account_id().await {
+                                        manager.invalidate_access_token(&id).await
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    other => break other,
+                }
+            };
+            match forward_outcome {
                 Ok((response, claude_api_format, outbound_model)) => {
                     // 成功：普通闭合熔断状态异步记录，避免阻塞流式首包返回；
                     // HalfOpen 探测仍同步等待，保证 permit 与熔断状态及时释放。
@@ -1199,6 +1238,13 @@ impl RequestForwarder {
             && super::providers::should_convert_codex_responses_to_chat(provider, endpoint);
         let codex_responses_to_anthropic = matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && super::providers::should_convert_codex_responses_to_anthropic(provider, endpoint);
+        // Antigravity 走 Codex 组合链：Responses → Anthropic → CloudCode（响应端逆变换）
+        let is_codex_antigravity = codex_responses_to_anthropic
+            && provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                == Some("antigravity_oauth");
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
 
@@ -1456,6 +1502,23 @@ impl RequestForwarder {
                 == Some(true);
         let (effective_endpoint, passthrough_query) = if codex_responses_to_chat {
             rewrite_codex_responses_endpoint_to_chat(endpoint)
+        } else if codex_responses_to_anthropic && is_codex_antigravity {
+            // Cloud Code：model 在请求体，URL 指向 v1internal
+            let is_stream = mapped_body
+                .get("stream")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let target = if is_stream {
+                "/v1internal:streamGenerateContent"
+            } else {
+                "/v1internal:generateContent"
+            };
+            let query = if is_stream { Some("alt=sse".to_string()) } else { None };
+            let rewritten = match query.as_deref() {
+                Some(q) => format!("{target}?{q}"),
+                _ => target.to_string(),
+            };
+            (rewritten, None)
         } else if codex_responses_to_anthropic {
             rewrite_codex_responses_endpoint_to_anthropic(endpoint)
         } else if needs_transform && adapter.name() == "Claude" {
@@ -1497,7 +1560,29 @@ impl RequestForwarder {
         let is_codex_alpha_search = matches!(app_type, AppType::Codex)
             && split_endpoint_and_query(&effective_endpoint).0 == "/alpha/search";
 
-        let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native"))
+        let is_gemini_antigravity = adapter.name() == "Gemini"
+            && provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                == Some("antigravity_oauth");
+        let url = if is_gemini_antigravity {
+            // daily + v1internal；model 留在请求体
+            let is_stream = mapped_body
+                .get("stream")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let target = if is_stream {
+                "/v1internal:streamGenerateContent?alt=sse"
+            } else {
+                "/v1internal:generateContent"
+            };
+            format!(
+                "{}{}",
+                super::providers::ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL,
+                target
+            )
+        } else if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native"))
             && provider
                 .meta
                 .as_ref()
@@ -1619,9 +1704,44 @@ impl RequestForwarder {
                 &mut anthropic_body,
                 &codex_anthropic_cache_config(&self.optimizer_config),
             );
-            anthropic_body
+            if is_codex_antigravity {
+                // Responses→Anthropic→CloudCode：复用 Claude 路径的 Gemini 转换
+                let model = anthropic_body
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let gemini_body = super::providers::transform_gemini::anthropic_to_gemini(
+                    anthropic_body,
+                )?;
+                super::providers::transform_gemini::wrap_gemini_body_for_cloudcode(
+                    gemini_body,
+                    &model,
+                    self.session_client_provided
+                        .then_some(self.session_id.as_str()),
+                )
+            } else {
+                anthropic_body
+            }
         } else if needs_transform {
-            if adapter.name() == "Claude" {
+            if adapter.name() == "Gemini" {
+                // Gemini app + Antigravity：请求体已是 Gemini generateContent 格式，
+                // 只需包 Cloud Code 信封（model 在 URL 里，此处提取）
+                let model = endpoint
+                    .split("/models/")
+                    .nth(1)
+                    .and_then(|rest| rest.split(':').next())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let session = self
+                    .session_client_provided
+                    .then_some(self.session_id.as_str());
+                super::providers::transform_gemini::wrap_gemini_body_for_cloudcode(
+                    mapped_body,
+                    &model,
+                    session,
+                )
+            } else if adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format
                     .as_deref()
                     .unwrap_or_else(|| super::providers::get_claude_api_format(provider));
@@ -2502,7 +2622,20 @@ impl RequestForwarder {
                 }
                 None => raw.to_vec(),
             };
-            let body_text = String::from_utf8(decoded).ok();
+            let mut body_text = String::from_utf8(decoded).ok();
+            // Antigravity：把 Google RPC 错误细节翻译成可操作的中文提示
+            let provider_is_antigravity = provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                == Some("antigravity_oauth");
+            if provider_is_antigravity {
+                if let Some(raw) = body_text.as_deref() {
+                    if let Some(hint) = explain_antigravity_error(status_code, raw) {
+                        body_text = Some(hint);
+                    }
+                }
+            }
 
             Err(ProxyError::UpstreamError {
                 status: status_code,
@@ -3487,6 +3620,37 @@ fn reject_proxy_placeholder_for_managed_account_upstream(
         "Managed account proxy auth was not resolved; PROXY_MANAGED must not be sent upstream"
             .to_string(),
     ))
+}
+
+/// 解析 Google RPC 错误体，针对 Antigravity 已知错误生成可操作提示。
+/// 无法识别时返回 None（保留原始错误文本）。
+fn explain_antigravity_error(status: u16, raw_body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(raw_body).ok()?;
+    let error = value.get("error")?;
+    let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+    let reason = error
+        .get("details")
+        .and_then(Value::as_array)
+        .and_then(|details| {
+            details
+                .iter()
+                .find_map(|detail| detail.get("reason").and_then(Value::as_str))
+        })
+        .unwrap_or("");
+    let hint = match (status, reason) {
+        (429, "RATE_LIMIT_EXCEEDED") => "请求过于频繁（上游限流），请稍后重试",
+        (429, "QUOTA_EXHAUSTED") => "今日免费额度已用尽，等待额度重置或更换模型",
+        (429, "INSUFFICIENT_G1_CREDITS_BALANCE") => "模型 Credits 余额不足，等待重置或更换更轻量的模型",
+        (429, "MODEL_CAPACITY_EXHAUSTED") | (503, "NO_CAPACITY") => {
+            "该模型当前无可用容量（上游满载），请稍后重试或更换模型"
+        }
+        (403, "SUBSCRIPTION_REQUIRED") => "账号无有效订阅：请用 Antigravity 免费层账号重新登录",
+        (400, _) if message.contains("signature") => {
+            "思考签名回放校验失败（多轮对话状态异常），请新开会话重试"
+        }
+        _ => return None,
+    };
+    Some(format!("{hint}（上游 {status}: {message}）"))
 }
 
 fn is_managed_account_upstream_url(url: &str) -> bool {

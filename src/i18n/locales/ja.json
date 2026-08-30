@@ -1474,7 +1474,10 @@
     "openAuthPage": "認証ページを再度開く",
     "retry": "再試行",
     "logoutAll": "すべての Antigravity アカウントを削除",
-    "loginRequired": "先に Google アカウントでログインしてください"
+    "loginRequired": "先に Google アカウントでログインしてください",
+    "testing": "テスト中…",
+    "test": "Test",
+    "testOk": "接続正常 · {{latency}}ms · 返信「{{reply}}」"
   },
   "managedAuth": {
     "accountRemoved": "アカウントを削除しました",

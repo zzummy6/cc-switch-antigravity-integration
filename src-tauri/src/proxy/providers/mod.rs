@@ -12,6 +12,7 @@
 //! - `transform`: 格式转换
 
 pub mod antigravity_oauth_auth;
+pub mod antigravity_secure_store;
 mod adapter;
 mod auth;
 mod claude;
@@ -205,6 +206,15 @@ impl ProviderType {
             }
             AppType::Codex => ProviderType::Codex,
             AppType::Gemini => {
+                // Antigravity OAuth（meta.providerType 标记）
+                if provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.provider_type.as_deref())
+                    == Some("antigravity_oauth")
+                {
+                    return Some(ProviderType::AntigravityOAuth);
+                }
                 // 检测是否为 CLI 模式（OAuth）
                 let adapter = GeminiAdapter::new();
                 if let Some(auth) = adapter.extract_auth(provider) {

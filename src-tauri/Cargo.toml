@@ -73,6 +73,7 @@ url = "2.5"
 auto-launch = "0.5"
 once_cell = "1.21.3"
 base64 = "0.22"
+rand = "0.9"
 rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
 indexmap = { version = "2", features = ["serde"] }
 rust_decimal = "1.33"
@@ -96,6 +97,7 @@ libc = "0.2"
 winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Globalization",
+    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
 ] }

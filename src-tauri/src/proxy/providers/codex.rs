@@ -850,6 +850,16 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
+        // Antigravity OAuth: 生成走 daily（管理面命令另用 prod 常量）
+        if provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth")
+        {
+            return Ok(super::ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL.to_string());
+        }
+
         if is_codex_official_provider(provider) {
             return Ok(super::CHATGPT_CODEX_BASE_URL.to_string());
         }
@@ -916,6 +926,20 @@ impl ProviderAdapter for CodexAdapter {
             return Some(AuthInfo::new(
                 "xai_oauth_placeholder".to_string(),
                 AuthStrategy::XaiOAuth,
+            ));
+        }
+
+        // Antigravity OAuth: placeholder only; forwarder injects the real token
+        // via AntigravityOAuthManager (same managed-account model).
+        if provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth")
+        {
+            return Some(AuthInfo::new(
+                "antigravity_oauth_placeholder".to_string(),
+                AuthStrategy::AntigravityOAuth,
             ));
         }
 

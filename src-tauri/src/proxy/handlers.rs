@@ -911,6 +911,45 @@ async fn handle_responses_for_app(
     let response = result.response;
 
     if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
+        // Antigravity 上游是 Cloud Code 格式（SSE 带 response 包装 / JSON 顶层 response），
+        // 先预转换成标准 Anthropic 形态再走通用 Anthropic→Responses 转换
+        let is_antigravity = ctx
+            .provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth");
+        let response = if is_antigravity {
+            let status = response.status();
+            let headers = response.headers().clone();
+            if response.is_sse() {
+                let stream = create_anthropic_sse_stream_from_gemini(
+                    response.bytes_stream(),
+                    Some(state.gemini_shadow.clone()),
+                    Some(ctx.provider.id.clone()),
+                    Some(ctx.session_id.clone()),
+                    None,
+                );
+                super::hyper_client::ProxyResponse::streamed(status, headers, stream)
+            } else {
+                let bytes = response
+                    .bytes_with_limit(super::hyper_client::MAX_RESPONSE_BODY_BYTES)
+                    .await?;
+                let payload: serde_json::Value = serde_json::from_slice(&bytes)
+                    .map_err(|error| ProxyError::TransformError(error.to_string()))?;
+                let unwrapped = transform_gemini::unwrap_cloudcode_response(payload);
+                let anthropic = transform_gemini::gemini_to_anthropic(unwrapped)?;
+                super::hyper_client::ProxyResponse::buffered(
+                    status,
+                    headers,
+                    serde_json::to_vec(&anthropic)
+                        .map_err(|error| ProxyError::TransformError(error.to_string()))?
+                        .into(),
+                )
+            }
+        } else {
+            response
+        };
         return handle_codex_anthropic_to_responses_transform(
             response,
             &ctx,

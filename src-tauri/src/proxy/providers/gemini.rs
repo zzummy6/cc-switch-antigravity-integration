@@ -162,7 +162,27 @@ impl ProviderAdapter for GeminiAdapter {
         "Gemini"
     }
 
+    fn needs_transform(&self, provider: &Provider) -> bool {
+        // Antigravity：Gemini 请求体需要包 Cloud Code 信封（forwarder 特判完成
+        // model 提取与 URL 重写，这里只负责声明需要转换）
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth")
+    }
+
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
+        // Antigravity OAuth：生成走 daily
+        if provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth")
+        {
+            return Ok(super::ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL.to_string());
+        }
+
         // 从 env 中获取
         if let Some(env) = provider.settings_config.get("env") {
             if let Some(url) = env.get("GOOGLE_GEMINI_BASE_URL").and_then(|v| v.as_str()) {
@@ -193,6 +213,18 @@ impl ProviderAdapter for GeminiAdapter {
     }
 
     fn extract_auth(&self, provider: &Provider) -> Option<AuthInfo> {
+        // Antigravity OAuth：占位符，真实 token 由 forwarder 动态注入
+        if provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth")
+        {
+            return Some(AuthInfo::new(
+                "antigravity_oauth_placeholder".to_string(),
+                AuthStrategy::AntigravityOAuth,
+            ));
+        }
         let key = self.extract_key_raw(provider)?;
         let strategy = self.detect_auth_type(provider);
 
@@ -247,6 +279,11 @@ impl ProviderAdapter for GeminiAdapter {
                         HeaderValue::from_static("GeminiCLI/1.0"),
                     ),
                 ]
+            }
+            AuthStrategy::AntigravityOAuth => {
+                // bearer token 由 forwarder 动态注入 auth.api_key
+                let bearer = format!("Bearer {}", auth.api_key);
+                vec![(HeaderName::from_static("authorization"), hv(&bearer)?)]
             }
             _ => vec![(
                 HeaderName::from_static("x-goog-api-key"),

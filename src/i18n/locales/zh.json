@@ -1474,7 +1474,10 @@
     "openAuthPage": "重新打开授权页面",
     "retry": "重试",
     "logoutAll": "移除所有 Antigravity 账号",
-    "loginRequired": "请先登录 Google 账号"
+    "loginRequired": "请先登录 Google 账号",
+    "testing": "测试中…",
+    "test": "Test",
+    "testOk": "连通正常 · {{latency}}ms · 回复「{{reply}}」"
   },
   "managedAuth": {
     "accountRemoved": "账号已移除",

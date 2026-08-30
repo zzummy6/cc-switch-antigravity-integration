@@ -1,8 +1,9 @@
 //! Antigravity OAuth state and Antigravity-specific commands.
 
 use crate::proxy::providers::antigravity_oauth_auth::AntigravityOAuthManager;
-use crate::proxy::providers::{ANTIGRAVITY_CLOUDCODE_BASE_URL, ANTIGRAVITY_USER_AGENT};
-use crate::services::model_fetch::FetchedModel;
+use crate::proxy::providers::{
+    ANTIGRAVITY_CLOUDCODE_BASE_URL, ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL, ANTIGRAVITY_USER_AGENT,
+};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,19 +16,61 @@ pub struct AntigravityOAuthState(pub Arc<RwLock<AntigravityOAuthManager>>);
 ///
 /// 上游返回 map（models.<id>）或数组两种形态都能处理；拿不到结构时
 /// 回退到 language server 二进制中确认过的模型名。
-fn parse_available_models(payload: &Value) -> Vec<FetchedModel> {
-    let mut models: Vec<FetchedModel> = Vec::new();
+/// 统一模型结构（Phase 3）：capabilities 从 fetchAvailableModels 元数据映射
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AntigravityModel {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub provider: String,
+    pub capabilities: AntigravityModelCapabilities,
+    /// 兼容 FetchedModel 消费方（ModelInputWithFetch 等）的展示字段
+    pub owned_by: Option<String>,
+}
 
-    let push_model = |models: &mut Vec<FetchedModel>, id: String, entry: Option<&Value>| {
-        let id = id
-            .strip_prefix("models/")
-            .unwrap_or(&id)
-            .trim()
-            .to_string();
-        if id.is_empty() || SKIPPED_MODEL_IDS.contains(&id.as_str())
-            || models
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AntigravityModelCapabilities {
+    pub max_context_tokens: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub web_search: bool,
+}
+
+/// 上游内部/不可用 ID，不应对用户展示（协议文档 §3.6）
+const SKIPPED_MODEL_IDS: &[&str] = &[
+    "chat_20706",
+    "chat_23310",
+    "tab_flash_lite_preview",
+    "tab_jump_flash_lite_preview",
+    "gemini-2.5-flash-thinking",
+];
+
+const FALLBACK_ANTIGRAVITY_MODELS: &[&str] = &[
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3.1-flash-image-preview",
+    "claude-sonnet-4-5",
+];
+
+fn parse_available_models(payload: &Value) -> Vec<AntigravityModel> {
+    let mut models: Vec<AntigravityModel> = Vec::new();
+    let web_search_ids: Vec<String> = payload
+        .get("webSearchModelIds")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
                 .iter()
-                .any(|existing| existing.id.eq_ignore_ascii_case(&id))
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut push_model = |models: &mut Vec<AntigravityModel>,
+                          id: String,
+                          entry: Option<&Value>| {
+        let id = id.strip_prefix("models/").unwrap_or(&id).trim().to_string();
+        if id.is_empty()
+            || SKIPPED_MODEL_IDS.contains(&id.as_str())
+            || models.iter().any(|m| m.id.eq_ignore_ascii_case(&id))
         {
             return;
         }
@@ -35,8 +78,20 @@ fn parse_available_models(payload: &Value) -> Vec<FetchedModel> {
             .and_then(|entry| entry.get("displayName"))
             .and_then(Value::as_str)
             .map(ToString::to_string);
-        models.push(FetchedModel {
+        let capabilities = AntigravityModelCapabilities {
+            max_context_tokens: entry
+                .and_then(|entry| entry.get("maxTokens"))
+                .and_then(Value::as_i64),
+            max_output_tokens: entry
+                .and_then(|entry| entry.get("maxOutputTokens"))
+                .and_then(Value::as_i64),
+            web_search: web_search_ids.contains(&id),
+        };
+        models.push(AntigravityModel {
             id,
+            display_name: display_name.clone(),
+            provider: "antigravity".to_string(),
+            capabilities,
             owned_by: display_name.or_else(|| Some("antigravity".to_string())),
         });
     };
@@ -71,28 +126,11 @@ fn parse_available_models(payload: &Value) -> Vec<FetchedModel> {
     models
 }
 
-/// 上游内部/不可用 ID，不应对用户展示（协议文档 §3.6）
-const SKIPPED_MODEL_IDS: &[&str] = &[
-    "chat_20706",
-    "chat_23310",
-    "tab_flash_lite_preview",
-    "tab_jump_flash_lite_preview",
-    "gemini-2.5-flash-thinking",
-];
-
-const FALLBACK_ANTIGRAVITY_MODELS: &[&str] = &[
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-3.1-flash-image-preview",
-    "claude-sonnet-4-5",
-];
-
-/// 列出 Antigravity (Cloud Code) 可用模型
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_antigravity_oauth_models(
     account_id: Option<String>,
     state: State<'_, AntigravityOAuthState>,
-) -> Result<Vec<FetchedModel>, String> {
+) -> Result<Vec<AntigravityModel>, String> {
     let manager = state.0.read().await;
     let resolved = match account_id
         .as_deref()
@@ -136,6 +174,90 @@ pub async fn get_antigravity_oauth_models(
     Ok(parse_available_models(&payload))
 }
 
+/// 真实连通性测试：拿当前账号 token 直接调 daily generateContent，
+/// 返回首字延迟与样例回复。供 UI [Test] 按钮使用（需求 §8/§9：必须真实调用）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn test_antigravity_oauth_connection(
+    account_id: Option<String>,
+    state: State<'_, AntigravityOAuthState>,
+) -> Result<Value, String> {
+    let manager = state.0.read().await;
+    let resolved = match account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => Some(id.to_string()),
+        None => manager.default_account_id().await,
+    };
+    let account_id =
+        resolved.ok_or_else(|| "No usable Antigravity account available".to_string())?;
+    let token = manager
+        .get_valid_token_for_account(&account_id)
+        .await
+        .map_err(|error| format!("Antigravity OAuth token unavailable: {error}"))?;
+    drop(manager);
+
+    let started = std::time::Instant::now();
+    let response = crate::proxy::http_client::get()
+        .post(format!(
+            "{ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL}/v1internal:generateContent"
+        ))
+        .bearer_auth(token)
+        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+        .json(&serde_json::json!({
+            "model": "gemini-3-flash",
+            "userAgent": "antigravity",
+            "requestType": "agent",
+            "requestId": format!("agent-{}", uuid::Uuid::new_v4()),
+            "request": {
+                "sessionId": "-4785074604081157025",
+                "contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}],
+                "generationConfig": {"maxOutputTokens": 8192}
+            }
+        }))
+        .timeout(Duration::from_secs(45))
+        .send()
+        .await
+        .map_err(|error| format!("request failed: {error}"))?;
+    let status = response.status();
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|_| "response was not valid JSON".to_string())?;
+    if !status.is_success() {
+        let message = body
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown error");
+        return Err(format!("HTTP {status}: {message}"));
+    }
+    let reply = body
+        .get("response")
+        .and_then(|response| response.get("candidates"))
+        .and_then(Value::as_array)
+        .and_then(|candidates| candidates.first())
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.first())
+        .and_then(|part| part.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if reply.trim().is_empty() {
+        return Err("上游返回了空回复".to_string());
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "latencyMs": latency_ms,
+        "model": "gemini-3-flash",
+        "sampleReply": reply,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +273,8 @@ mod tests {
         let models = parse_available_models(&payload);
         let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
         assert_eq!(ids, vec!["claude-sonnet-4-5", "gemini-2.5-pro"]);
+        assert_eq!(models[1].provider, "antigravity");
+        assert_eq!(models[1].display_name.as_deref(), Some("Gemini 2.5 Pro"));
     }
 
     #[test]

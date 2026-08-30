@@ -1456,6 +1456,7 @@ pub fn run() {
             commands::get_xai_oauth_models,
             commands::get_xai_oauth_quota,
             commands::get_antigravity_oauth_models,
+            commands::test_antigravity_oauth_connection,
             commands::get_coding_plan_quota,
             commands::get_balance,
             // New MCP via config.json (SSOT)
