@@ -34,7 +34,7 @@ export interface CodexProviderPreset {
   // Codex API 格式
   apiFormat?: CodexApiFormat;
   // 仅用于区分预设来源；ChatGPT/Codex 与 xAI/Grok 的认证流程彼此独立。
-  providerType?: "codex_oauth" | "xai_oauth";
+  providerType?: "codex_oauth" | "xai_oauth" | "antigravity_oauth";
   // OAuth 预设：隐藏 API Key 输入，保存前要求已登录托管账号
   requiresOAuth?: boolean;
   // Codex Chat 本地路由模式下的模型目录
@@ -1827,6 +1827,24 @@ requires_openai_auth = true`,
     category: "third_party",
     icon: "xai",
     iconColor: "#000000",
+  },
+  {
+    name: "Antigravity (Google)",
+    websiteUrl: "https://antigravity.google",
+    auth: generateThirdPartyAuth(""),
+    // 托管 OAuth：真实 token 由本地代理按请求注入，CodexAdapter 硬定向 daily
+    // Cloud Code；这里的 base_url / 空 auth 只是配置快照，转发时不生效。
+    config: generateThirdPartyConfig(
+      "antigravity",
+      "https://daily-cloudcode-pa.googleapis.com",
+      "gemini-3-flash",
+    ),
+    // 组合链：Responses -> Anthropic -> Cloud Code（要求 anthropic wire 判定）
+    apiFormat: "anthropic",
+    providerType: "antigravity_oauth",
+    requiresOAuth: true,
+    icon: "gemini",
+    iconColor: "#1a73e8",
   },
   {
     name: "Nvidia",

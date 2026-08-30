@@ -44,6 +44,7 @@ import EndpointSpeedTest from "./EndpointSpeedTest";
 import { CodexOAuthSection } from "./CodexOAuthSection";
 import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
 import { XaiOAuthSection } from "./XaiOAuthSection";
+import { AntigravityOAuthSection } from "./AntigravityOAuthSection";
 import {
   fetchModelsForConfig,
   fetchXaiOauthModels,
@@ -74,6 +75,10 @@ interface CodexFormFieldsProps {
   // xAI OAuth 托管预设（Grok 订阅）：隐藏 API Key / 端点输入，挂账号选择区块
   isXaiOauthPreset?: boolean;
   isXaiOauthAuthenticated?: boolean;
+  isAntigravityOauthPreset?: boolean;
+  isAntigravityOauthAuthenticated?: boolean;
+  selectedAntigravityAccountId?: string | null;
+  onAntigravityAccountSelect?: (accountId: string | null) => void;
   selectedXaiAccountId?: string | null;
   onXaiAccountSelect?: (accountId: string | null) => void;
   // API Key
@@ -369,6 +374,9 @@ export function CodexFormFields({
   providerId,
   isXaiOauthPreset,
   isXaiOauthAuthenticated,
+  isAntigravityOauthPreset,
+  selectedAntigravityAccountId,
+  onAntigravityAccountSelect,
   selectedXaiAccountId,
   onXaiAccountSelect,
   codexApiKey,
@@ -752,8 +760,15 @@ export function CodexFormFields({
         />
       )}
 
+      {isAntigravityOauthPreset && (
+        <AntigravityOAuthSection
+          selectedAccountId={selectedAntigravityAccountId}
+          onAccountSelect={onAntigravityAccountSelect}
+        />
+      )}
+
       {/* Codex API Key 输入框（托管 OAuth 预设无需 Key） */}
-      {!isCodexOauthPreset && !isXaiOauthPreset && (
+      {!isCodexOauthPreset && !isXaiOauthPreset && !isAntigravityOauthPreset && (
         <ApiKeySection
           id="codexApiKey"
           label="API Key"

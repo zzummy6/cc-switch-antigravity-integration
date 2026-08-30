@@ -816,7 +816,7 @@ function ProviderFormFull({
     (appId === "claude" || appId === "codex") &&
     (presetProviderType === "xai_oauth" || initialProviderType === "xai_oauth");
   const isAntigravityOauthProvider =
-    appId === "claude" &&
+    (appId === "claude" || appId === "codex") &&
     (presetProviderType === "antigravity_oauth" ||
       initialProviderType === "antigravity_oauth");
   const wasCodexOfficialManagedOauthBound =
@@ -1834,11 +1834,15 @@ function ProviderFormFull({
         appId === "claude" && category !== "official"
           ? isXaiOauthProvider
             ? "openai_responses"
-            : localApiFormat
+            : isAntigravityOauthProvider
+              ? "gemini_native"
+              : localApiFormat
           : appId === "codex" && category !== "official"
-            ? isXaiOauthProvider
-              ? "openai_responses"
-              : localCodexApiFormat
+            ? isAntigravityOauthProvider
+              ? "anthropic"
+              : isXaiOauthProvider
+                ? "openai_responses"
+                : localCodexApiFormat
             : undefined,
       apiKeyField:
         appId === "claude" &&
@@ -2496,6 +2500,10 @@ function ProviderFormFull({
                 presetProviderType === "xai_oauth" ||
                 initialData?.meta?.providerType === "xai_oauth"
               }
+              isAntigravityOauthPreset={isAntigravityOauthProvider}
+              isAntigravityOauthAuthenticated={isAntigravityOauthAuthenticated}
+              selectedAntigravityAccountId={selectedAntigravityAccountId}
+              onAntigravityAccountSelect={setSelectedAntigravityAccountId}
               isXaiOauthAuthenticated={isXaiOauthAuthenticated}
               selectedXaiAccountId={selectedXaiAccountId}
               onXaiAccountSelect={setSelectedXaiAccountId}
