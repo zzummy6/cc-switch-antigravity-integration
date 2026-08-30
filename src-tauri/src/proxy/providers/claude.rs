@@ -500,6 +500,13 @@ impl ClaudeAdapter {
     /// - ClaudeAuth: auth_mode 为 bearer_only
     /// - Claude: 默认 Anthropic 官方
     pub fn provider_type(&self, provider: &Provider) -> ProviderType {
+        // Antigravity OAuth 必须先于 gemini_native 分支判断：
+        // 它复用 gemini_native 格式，但 key 是 PROXY_MANAGED 占位符，
+        // 落入 gemini_native 分支会被误判为普通 Gemini（x-goog-api-key → 401）。
+        if self.is_antigravity_oauth(provider) {
+            return ProviderType::AntigravityOAuth;
+        }
+
         // 检测 Gemini Native 格式
         if self.get_api_format(provider) == "gemini_native" {
             return match self.extract_key(provider) {
@@ -747,9 +754,9 @@ impl ProviderAdapter for ClaudeAdapter {
             return Ok(super::XAI_API_BASE_URL.to_string());
         }
 
-        // Antigravity OAuth: Cloud Code 上游固定，忽略用户配置的 base_url
+        // Antigravity OAuth: 生成走 daily（prod 实测 429），管理面命令另用 prod 常量
         if self.is_antigravity_oauth(provider) {
-            return Ok(super::ANTIGRAVITY_CLOUDCODE_BASE_URL.to_string());
+            return Ok(super::ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL.to_string());
         }
 
         // 1. 从 env 中获取
@@ -896,7 +903,7 @@ impl ProviderAdapter for ClaudeAdapter {
         // Antigravity: endpoint 已由 rewrite_claude_transform_endpoint 重写为
         // `/v1internal:{generateContent,streamGenerateContent}[?alt=sse]`，
         // 此处只做简单的拼接兜底。
-        if base_url == super::ANTIGRAVITY_CLOUDCODE_BASE_URL {
+        if base_url == super::ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL {
             return format!(
                 "{}/{}",
                 base_url.trim_end_matches('/'),

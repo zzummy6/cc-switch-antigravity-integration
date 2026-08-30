@@ -288,6 +288,19 @@ pub fn gemini_to_anthropic_with_shadow_and_hints(
     Ok(anthropic_response)
 }
 
+/// Cloud Code 非流式响应体解包：`{"response":{...}}` → 内层 GenerateContentResponse。
+/// 标准 Gemini 非流式体（顶层 candidates）原样返回。
+pub fn unwrap_cloudcode_response(value: Value) -> Value {
+    if value.get("candidates").is_none() {
+        if let Some(inner) = value.get("response") {
+            if inner.is_object() {
+                return inner.clone();
+            }
+        }
+    }
+    value
+}
+
 pub fn extract_gemini_model(body: &Value) -> Option<&str> {
     body.get("model").and_then(|value| value.as_str())
 }
@@ -314,6 +327,11 @@ pub fn wrap_gemini_body_for_cloudcode(
     session_id: Option<&str>,
 ) -> Value {
     let model = crate::proxy::gemini_url::normalize_gemini_model_id(model);
+    // [1m]/[1M] 上下文标记是 cc-switch 内部语法，上游不认识，剥掉
+    let model = model
+        .strip_suffix("[1m]")
+        .or_else(|| model.strip_suffix("[1M]"))
+        .unwrap_or(model);
     let mut request = gemini_body.as_object_mut().cloned().unwrap_or_default();
 
     // sessionId：会话稳定派生（-<63bit int> 形态）；无 session 时随机

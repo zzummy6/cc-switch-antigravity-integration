@@ -8,7 +8,8 @@ import { test, expect, type Page } from "@playwright/test";
  * 验证路径：添加供应商 → 搜索 Antigravity 预设 → 表单出现 Google 登录区块。
  */
 
-type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
+type InvokeResult = unknown;
+type InvokeHandler = InvokeResult | ((cmd: string, args: Record<string, unknown>) => InvokeResult);
 
 function installTauriMock(page: Page, overrides: Record<string, InvokeHandler> = {}) {
   void page.addInitScript(
@@ -19,10 +20,11 @@ function installTauriMock(page: Page, overrides: Record<string, InvokeHandler> =
       const handlers: Record<string, (args: Record<string, unknown>) => unknown> =
         {};
       for (const [cmd, returnValue] of Object.entries(overrides)) {
+        const value = returnValue as InvokeResult;
         handlers[cmd] = () =>
           typeof structuredClone === "function"
-            ? structuredClone(returnValue)
-            : JSON.parse(JSON.stringify(returnValue));
+            ? structuredClone(value)
+            : JSON.parse(JSON.stringify(value));
       }
       Object.defineProperty(window, "__TAURI_INTERNALS__", {
         configurable: true,

@@ -24,7 +24,7 @@ fn parse_available_models(payload: &Value) -> Vec<FetchedModel> {
             .unwrap_or(&id)
             .trim()
             .to_string();
-        if id.is_empty()
+        if id.is_empty() || SKIPPED_MODEL_IDS.contains(&id.as_str())
             || models
                 .iter()
                 .any(|existing| existing.id.eq_ignore_ascii_case(&id))
@@ -70,6 +70,15 @@ fn parse_available_models(payload: &Value) -> Vec<FetchedModel> {
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models
 }
+
+/// 上游内部/不可用 ID，不应对用户展示（协议文档 §3.6）
+const SKIPPED_MODEL_IDS: &[&str] = &[
+    "chat_20706",
+    "chat_23310",
+    "tab_flash_lite_preview",
+    "tab_jump_flash_lite_preview",
+    "gemini-2.5-flash-thinking",
+];
 
 const FALLBACK_ANTIGRAVITY_MODELS: &[&str] = &[
     "gemini-2.5-flash",

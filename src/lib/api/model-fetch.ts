@@ -69,6 +69,15 @@ export async function fetchXaiOauthModels(
   });
 }
 
+/** 获取当前 Antigravity (Google Cloud Code) 账号可访问的模型列表。 */
+export async function fetchAntigravityOauthModels(
+  accountId?: string | null,
+): Promise<FetchedModel[]> {
+  return invoke("get_antigravity_oauth_models", {
+    accountId: accountId || null,
+  });
+}
+
 /**
  * 根据错误类型显示对应的 toast 提示
  */

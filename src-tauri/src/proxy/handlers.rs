@@ -640,6 +640,8 @@ async fn handle_claude_transform(
             )
         }
         (None, Some(response)) if api_format == "gemini_native" => {
+            // Cloud Code 非流式响应同样包在 {"response":{...}} 里，先解包
+            let response = transform_gemini::unwrap_cloudcode_response(response);
             transform_gemini::gemini_to_anthropic_with_shadow_and_hints(
                 response,
                 Some(state.gemini_shadow.as_ref()),

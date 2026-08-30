@@ -41,6 +41,7 @@ import {
 } from "@/lib/api/copilot";
 import type { CopilotModel } from "@/lib/api/copilot";
 import {
+  fetchAntigravityOauthModels,
   fetchCodexOauthModels,
   fetchXaiOauthModels,
   fetchModelsForConfig,
@@ -195,6 +196,7 @@ export function ClaudeFormFields({
   selectedXaiAccountId,
   onXaiAccountSelect,
   isAntigravityOauthPreset,
+  isAntigravityOauthAuthenticated,
   selectedAntigravityAccountId,
   onAntigravityAccountSelect,
   templateValueEntries,
@@ -278,6 +280,12 @@ export function ClaudeFormFields({
   const [xaiOauthModels, setXaiOauthModels] = useState<FetchedModel[]>([]);
   const [xaiOauthModelsLoading, setXaiOauthModelsLoading] = useState(false);
   const xaiOauthModelsRequestRef = useRef(0);
+
+  const [antigravityOauthModels, setAntigravityOauthModels] =
+    useState<FetchedModel[]>([]);
+  const [antigravityOauthModelsLoading, setAntigravityOauthModelsLoading] =
+    useState(false);
+  const antigravityOauthModelsRequestRef = useRef(0);
   const fallbackUsesOneM = hasClaudeOneMMarker(claudeModel);
 
   // 通用模型获取（非 Copilot 供应商）
@@ -435,6 +443,42 @@ export function ClaudeFormFields({
       });
   }, [isXaiOauthAuthenticated, selectedXaiAccountId, showModelFetchResult, t]);
 
+  const handleFetchAntigravityOauthModels = useCallback(() => {
+    if (!isAntigravityOauthAuthenticated) {
+      toast.error(
+        t("antigravityOauth.loginRequired", {
+          defaultValue: "请先登录 Google 账号",
+        }),
+      );
+      return;
+    }
+
+    const requestId = antigravityOauthModelsRequestRef.current + 1;
+    antigravityOauthModelsRequestRef.current = requestId;
+    setAntigravityOauthModelsLoading(true);
+    fetchAntigravityOauthModels(selectedAntigravityAccountId)
+      .then((models) => {
+        if (antigravityOauthModelsRequestRef.current !== requestId) return;
+        setAntigravityOauthModels(models);
+        showModelFetchResult(models.length);
+      })
+      .catch((err) => {
+        if (antigravityOauthModelsRequestRef.current !== requestId) return;
+        console.warn("[AntigravityOAuth] Failed to fetch models:", err);
+        showFetchModelsError(err, t);
+      })
+      .finally(() => {
+        if (antigravityOauthModelsRequestRef.current === requestId) {
+          setAntigravityOauthModelsLoading(false);
+        }
+      });
+  }, [
+    isAntigravityOauthAuthenticated,
+    selectedAntigravityAccountId,
+    showModelFetchResult,
+    t,
+  ]);
+
   useEffect(() => {
     copilotModelsRequestRef.current += 1;
     setCopilotModels([]);
@@ -453,20 +497,34 @@ export function ClaudeFormFields({
     setXaiOauthModelsLoading(false);
   }, [isXaiOauthPreset, isXaiOauthAuthenticated, selectedXaiAccountId]);
 
+  useEffect(() => {
+    antigravityOauthModelsRequestRef.current += 1;
+    setAntigravityOauthModels([]);
+    setAntigravityOauthModelsLoading(false);
+  }, [
+    isAntigravityOauthPreset,
+    isAntigravityOauthAuthenticated,
+    selectedAntigravityAccountId,
+  ]);
+
   const modelFetchLoading = isCopilotPreset
     ? modelsLoading
     : isCodexOauthPreset
       ? codexOauthModelsLoading
       : isXaiOauthPreset
         ? xaiOauthModelsLoading
-        : isFetchingModels;
+        : isAntigravityOauthPreset
+          ? antigravityOauthModelsLoading
+          : isFetchingModels;
   const handleModelFetchClick = isCopilotPreset
     ? handleFetchCopilotModels
     : isCodexOauthPreset
       ? handleFetchCodexOauthModels
       : isXaiOauthPreset
         ? handleFetchXaiOauthModels
-        : handleFetchModels;
+        : isAntigravityOauthPreset
+          ? handleFetchAntigravityOauthModels
+          : handleFetchModels;
 
   // 模型输入框：支持手动输入 + 下拉选择
   const renderModelInput = (
@@ -556,6 +614,20 @@ export function ClaudeFormFields({
           onChange={(e) => updateValue(e.target.value)}
           placeholder={placeholder}
           autoComplete="off"
+        />
+      );
+    }
+
+    // Antigravity: 复用 ModelInputWithFetch，但数据源/加载态走 OAuth fetch
+    if (isAntigravityOauthPreset) {
+      return (
+        <ModelInputWithFetch
+          id={id}
+          value={value}
+          onChange={updateValue}
+          placeholder={placeholder}
+          fetchedModels={antigravityOauthModels}
+          isLoading={antigravityOauthModelsLoading}
         />
       );
     }

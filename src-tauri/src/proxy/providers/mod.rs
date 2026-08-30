@@ -47,7 +47,10 @@ use serde::{Deserialize, Serialize};
 
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
+/// prod：loadCodeAssist / fetchAvailableModels（管理面）
 pub const ANTIGRAVITY_CLOUDCODE_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
+/// daily：generateContent / streamGenerateContent（生成面，prod 实测 429）
+pub const ANTIGRAVITY_CLOUDCODE_DAILY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 /// Antigravity 上游按 antigravity/hub/<ver> 指纹识别客户端（协议文档 §3.5）。
 pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/hub/2.9.1 windows/x64";
 
