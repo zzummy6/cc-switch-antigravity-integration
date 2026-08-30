@@ -351,7 +351,8 @@
       "beta": "Beta",
       "copilotDescription": "Manage GitHub Copilot accounts",
       "codexOauthDescription": "Manage ChatGPT accounts",
-      "xaiOauthDescription": "Manage xAI / Grok accounts"
+      "xaiOauthDescription": "Manage xAI / Grok accounts",
+      "antigravityOauthDescription": "Manage Antigravity / Google accounts"
     },
     "advanced": {
       "configDir": {
@@ -1453,6 +1454,27 @@
     "retry": "Retry",
     "logoutAll": "Remove all xAI accounts",
     "loginRequired": "Sign in to an xAI account first"
+  },
+  "antigravityOauth": {
+    "authStatus": "Antigravity OAuth",
+    "accountCount": "{{count}} usable account(s)",
+    "reauthRequired": "Re-login required",
+    "notAuthenticated": "Not authenticated",
+    "selectAccount": "Select account",
+    "selectAccountPlaceholder": "Select a Google account",
+    "useDefaultAccount": "Use default account",
+    "accounts": "Google accounts",
+    "defaultAccount": "Default",
+    "expired": "Credentials expired",
+    "setAsDefault": "Set as default",
+    "removeAccount": "Remove account",
+    "addOrReauth": "Add account or re-login",
+    "login": "Sign in with Google",
+    "waitingForAuth": "Waiting for Google consent… (finish in the browser)",
+    "openAuthPage": "Reopen the authorization page",
+    "retry": "Retry",
+    "logoutAll": "Remove all Antigravity accounts",
+    "loginRequired": "Sign in with a Google account first"
   },
   "managedAuth": {
     "accountRemoved": "Account removed",

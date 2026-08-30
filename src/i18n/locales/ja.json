@@ -351,7 +351,8 @@
       "beta": "Beta",
       "copilotDescription": "GitHub Copilot アカウントを管理します",
       "codexOauthDescription": "ChatGPT アカウントを管理します",
-      "xaiOauthDescription": "xAI / Grok アカウントを管理します"
+      "xaiOauthDescription": "xAI / Grok アカウントを管理します",
+      "antigravityOauthDescription": "Antigravity / Google アカウントを管理"
     },
     "advanced": {
       "configDir": {
@@ -1453,6 +1454,27 @@
     "retry": "再試行",
     "logoutAll": "すべての xAI アカウントを削除",
     "loginRequired": "先に xAI アカウントへログインしてください"
+  },
+  "antigravityOauth": {
+    "authStatus": "Antigravity OAuth 認証",
+    "accountCount": "使用可能なアカウント: {{count}} 件",
+    "reauthRequired": "再ログインが必要です",
+    "notAuthenticated": "未認証",
+    "selectAccount": "アカウントを選択",
+    "selectAccountPlaceholder": "Google アカウントを選択",
+    "useDefaultAccount": "デフォルトアカウントを使用",
+    "accounts": "Google アカウント",
+    "defaultAccount": "デフォルト",
+    "expired": "資格情報の有効期限切れ",
+    "setAsDefault": "デフォルトに設定",
+    "removeAccount": "アカウントを削除",
+    "addOrReauth": "アカウント追加または再ログイン",
+    "login": "Google でログイン",
+    "waitingForAuth": "Google の同意を待っています…（ブラウザで完了してください）",
+    "openAuthPage": "認証ページを再度開く",
+    "retry": "再試行",
+    "logoutAll": "すべての Antigravity アカウントを削除",
+    "loginRequired": "先に Google アカウントでログインしてください"
   },
   "managedAuth": {
     "accountRemoved": "アカウントを削除しました",

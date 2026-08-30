@@ -135,6 +135,14 @@ pub enum AuthStrategy {
     ///
     /// access token 由 xAI Device Code 流程获取并由 forwarder 动态注入。
     XaiOAuth,
+
+    /// Antigravity (Google Cloud Code) OAuth
+    ///
+    /// - Header: `Authorization: Bearer <access_token>`
+    ///
+    /// access token 由 Google authorization-code + loopback 流程获取
+    /// （Antigravity desktop client），由 forwarder 动态注入。
+    AntigravityOAuth,
 }
 
 #[cfg(test)]

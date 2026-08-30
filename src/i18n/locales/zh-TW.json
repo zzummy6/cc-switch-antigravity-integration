@@ -351,7 +351,8 @@
       "beta": "Beta",
       "copilotDescription": "管理 GitHub Copilot 帳號",
       "codexOauthDescription": "管理 ChatGPT 帳號",
-      "xaiOauthDescription": "管理 xAI / Grok 帳號"
+      "xaiOauthDescription": "管理 xAI / Grok 帳號",
+      "antigravityOauthDescription": "管理 Antigravity / Google 帳號"
     },
     "advanced": {
       "configDir": {
@@ -1454,6 +1455,27 @@
     "retry": "重試",
     "logoutAll": "移除所有 xAI 帳號",
     "loginRequired": "請先登入 xAI 帳號"
+  },
+  "antigravityOauth": {
+    "authStatus": "Antigravity OAuth 認證",
+    "accountCount": "{{count}} 個可用帳號",
+    "reauthRequired": "需要重新登入",
+    "notAuthenticated": "未認證",
+    "selectAccount": "選擇帳號",
+    "selectAccountPlaceholder": "選擇 Google 帳號",
+    "useDefaultAccount": "使用預設帳號",
+    "accounts": "Google 帳號",
+    "defaultAccount": "預設",
+    "expired": "憑證已失效",
+    "setAsDefault": "設為預設",
+    "removeAccount": "移除帳號",
+    "addOrReauth": "新增帳號或重新登入",
+    "login": "使用 Google 登入",
+    "waitingForAuth": "等待 Google 授權完成…（在瀏覽器視窗中登入）",
+    "openAuthPage": "重新開啟授權頁面",
+    "retry": "重試",
+    "logoutAll": "移除所有 Antigravity 帳號",
+    "loginRequired": "請先登入 Google 帳號"
   },
   "managedAuth": {
     "accountRemoved": "帳號已移除",

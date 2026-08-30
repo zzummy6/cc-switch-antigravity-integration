@@ -11,6 +11,7 @@
 //! - `models`: API 数据模型
 //! - `transform`: 格式转换
 
+pub mod antigravity_oauth_auth;
 mod adapter;
 mod auth;
 mod claude;
@@ -46,6 +47,9 @@ use serde::{Deserialize, Serialize};
 
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
+pub const ANTIGRAVITY_CLOUDCODE_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
+/// Antigravity 上游按 antigravity/hub/<ver> 指纹识别客户端（协议文档 §3.5）。
+pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/hub/2.9.1 windows/x64";
 
 // 公开导出
 pub use adapter::ProviderAdapter;
@@ -90,6 +94,8 @@ pub enum ProviderType {
     CodexOAuth,
     /// xAI Grok OAuth（需要 Anthropic ↔ Responses API 转换）
     XaiOAuth,
+    /// Antigravity / Google Cloud Code OAuth（需要 Anthropic ↔ Gemini 转换）
+    AntigravityOAuth,
 }
 
 impl ProviderType {
@@ -104,6 +110,7 @@ impl ProviderType {
             ProviderType::GitHubCopilot => true,
             ProviderType::CodexOAuth => true,
             ProviderType::XaiOAuth => true,
+            ProviderType::AntigravityOAuth => true,
             ProviderType::OpenRouter => false,
             _ => false,
         }
@@ -122,6 +129,7 @@ impl ProviderType {
             ProviderType::GitHubCopilot => "https://api.githubcopilot.com",
             ProviderType::CodexOAuth => CHATGPT_CODEX_BASE_URL,
             ProviderType::XaiOAuth => XAI_API_BASE_URL,
+            ProviderType::AntigravityOAuth => ANTIGRAVITY_CLOUDCODE_BASE_URL,
         }
     }
 
@@ -152,6 +160,9 @@ impl ProviderType {
                     }
                     if meta.provider_type.as_deref() == Some("xai_oauth") {
                         return Some(ProviderType::XaiOAuth);
+                    }
+                    if meta.provider_type.as_deref() == Some("antigravity_oauth") {
+                        return Some(ProviderType::AntigravityOAuth);
                     }
                 }
 
@@ -225,6 +236,7 @@ impl ProviderType {
             ProviderType::GitHubCopilot => "github_copilot",
             ProviderType::CodexOAuth => "codex_oauth",
             ProviderType::XaiOAuth => "xai_oauth",
+            ProviderType::AntigravityOAuth => "antigravity_oauth",
         }
     }
 }
@@ -251,6 +263,9 @@ impl std::str::FromStr for ProviderType {
             }
             "codex_oauth" | "codex-oauth" | "codexoauth" => Ok(ProviderType::CodexOAuth),
             "xai_oauth" | "xai-oauth" | "xaioauth" => Ok(ProviderType::XaiOAuth),
+            "antigravity_oauth" | "antigravity-oauth" | "antigravityoauth" => {
+                Ok(ProviderType::AntigravityOAuth)
+            }
             _ => Err(format!("Invalid provider type: {s}")),
         }
     }
@@ -272,12 +287,13 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
 #[allow(dead_code)]
 pub fn get_adapter_for_provider_type(provider_type: &ProviderType) -> Box<dyn ProviderAdapter> {
     match provider_type {
-        ProviderType::Claude
-        | ProviderType::ClaudeAuth
-        | ProviderType::OpenRouter
-        | ProviderType::GitHubCopilot
-        | ProviderType::CodexOAuth
-        | ProviderType::XaiOAuth => Box::new(ClaudeAdapter::new()),
+            ProviderType::Claude
+            | ProviderType::ClaudeAuth
+            | ProviderType::OpenRouter
+            | ProviderType::GitHubCopilot
+            | ProviderType::CodexOAuth
+            | ProviderType::XaiOAuth
+            | ProviderType::AntigravityOAuth => Box::new(ClaudeAdapter::new()),
         ProviderType::Codex => Box::new(CodexAdapter::new()),
         ProviderType::Gemini | ProviderType::GeminiCli => Box::new(GeminiAdapter::new()),
     }

@@ -11,6 +11,7 @@ use crate::proxy::tool_media::{
     strip_and_clamp_media_from_tool_value, ToolMediaScope, TOOL_RESULT_MEDIA_ATTACHED_MARKER,
 };
 use serde_json::{json, Map, Value};
+use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -289,6 +290,88 @@ pub fn gemini_to_anthropic_with_shadow_and_hints(
 
 pub fn extract_gemini_model(body: &Value) -> Option<&str> {
     body.get("model").and_then(|value| value.as_str())
+}
+
+/// 将标准 Gemini `generateContent` 请求体转换为 Google Cloud Code
+/// `v1internal` 信封（Antigravity 上游格式，形态经协议实证）：
+///
+/// ```json
+/// {
+///   "model": "...", "userAgent": "antigravity", "requestType": "agent",
+///   "requestId": "agent-<uuid>",
+///   "request": { "sessionId": "-<i64>", ...gemini body..., "toolConfig": {...} }
+/// }
+/// ```
+///
+/// 要点（`docs/antigravity-protocol.md` §3.5 / antigravity-bridge 实测）：
+/// - `sessionId` 必须在同一会话内稳定（`-<63bit int>` 哈希形态）
+/// - claude-* 模型必须显式 `toolConfig.mode = "VALIDATED"`
+/// - `maxOutputTokens` 封顶 128_000
+/// - `systemInstruction` 需要 `role: "user"` 归一化
+pub fn wrap_gemini_body_for_cloudcode(
+    mut gemini_body: Value,
+    model: &str,
+    session_id: Option<&str>,
+) -> Value {
+    let model = crate::proxy::gemini_url::normalize_gemini_model_id(model);
+    let mut request = gemini_body.as_object_mut().cloned().unwrap_or_default();
+
+    // sessionId：会话稳定派生（-<63bit int> 形态）；无 session 时随机
+    let session_seed = session_id
+        .map(str::trim)
+        .filter(|session| !session.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_hash_full = sha2::Sha256::digest(format!("cc-switch:{session_seed}").as_bytes());
+    let session_u64 = u64::from_be_bytes([
+        session_hash_full[0],
+        session_hash_full[1],
+        session_hash_full[2],
+        session_hash_full[3],
+        session_hash_full[4],
+        session_hash_full[5],
+        session_hash_full[6],
+        session_hash_full[7],
+    ]) & 0x7fff_ffff_ffff_ffff;
+    let session_id_value = format!("-{}", session_u64 | 1);
+
+    // systemInstruction 归一化为 {role:"user", parts:[...]}
+    if let Some(system) = request.get_mut("systemInstruction") {
+        if system.get("role").is_none() {
+            if let Some(system_obj) = system.as_object_mut() {
+                system_obj.insert("role".to_string(), json!("user"));
+            }
+        }
+    }
+
+    if request.get("sessionId").is_none() {
+        request.insert("sessionId".to_string(), json!(session_id_value));
+    }
+
+    // toolConfig：claude-* 模型强制 VALIDATED；其余保持 Anthropic tool_choice 语义未映射时不加
+    if model.contains("claude") {
+        request.insert(
+            "toolConfig".to_string(),
+            json!({"functionCallingConfig": {"mode": "VALIDATED"}}),
+        );
+    }
+
+    // maxOutputTokens 封顶 128_000（int32 安全 + 上游上限）
+    if let Some(config) = request.get_mut("generationConfig") {
+        if let Some(max_tokens) = config.get_mut("maxOutputTokens") {
+            if let Some(value) = max_tokens.as_u64() {
+                *max_tokens = json!(value.min(128_000) as u32);
+            }
+        }
+    }
+
+    json!({
+        "model": model,
+        "userAgent": "antigravity",
+        "requestType": "agent",
+        "requestId": format!("agent-{}", uuid::Uuid::new_v4()),
+        "request": request,
+    })
 }
 
 fn build_system_instruction(

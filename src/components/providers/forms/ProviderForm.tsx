@@ -113,6 +113,7 @@ import {
   useHermesFormState,
   useCopilotAuth,
   useCodexOauth,
+  useAntigravityOauth,
   useXaiOauth,
 } from "./hooks";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -144,11 +145,12 @@ type PresetEntry = {
 
 function getPresetProviderType(
   preset: PresetEntry["preset"] | null | undefined,
-): "github_copilot" | "codex_oauth" | "xai_oauth" | undefined {
+): "github_copilot" | "codex_oauth" | "xai_oauth" | "antigravity_oauth" | undefined {
   if (!preset || !("providerType" in preset)) return undefined;
   return preset.providerType === "github_copilot" ||
     preset.providerType === "codex_oauth" ||
-    preset.providerType === "xai_oauth"
+    preset.providerType === "xai_oauth" ||
+    preset.providerType === "antigravity_oauth"
     ? preset.providerType
     : undefined;
 }
@@ -593,6 +595,11 @@ function ProviderFormFull({
     accounts: xaiOauthAccounts,
   } = useXaiOauth();
 
+  const {
+    isAuthenticated: isAntigravityOauthAuthenticated,
+    accounts: antigravityOauthAccounts,
+  } = useAntigravityOauth();
+
   // 选中的 GitHub 账号 ID（多账号支持）
   const [selectedGitHubAccountId, setSelectedGitHubAccountId] = useState<
     string | null
@@ -607,6 +614,10 @@ function ProviderFormFull({
   const [selectedXaiAccountId, setSelectedXaiAccountId] = useState<
     string | null
   >(() => resolveManagedAccountId(initialData?.meta, "xai_oauth"));
+  const [selectedAntigravityAccountId, setSelectedAntigravityAccountId] =
+    useState<string | null>(() =>
+      resolveManagedAccountId(initialData?.meta, "antigravity_oauth"),
+    );
   const [codexFastMode, setCodexFastMode] = useState<boolean>(
     () => initialData?.meta?.codexFastMode ?? false,
   );
@@ -804,6 +815,10 @@ function ProviderFormFull({
   const isXaiOauthProvider =
     (appId === "claude" || appId === "codex") &&
     (presetProviderType === "xai_oauth" || initialProviderType === "xai_oauth");
+  const isAntigravityOauthProvider =
+    appId === "claude" &&
+    (presetProviderType === "antigravity_oauth" ||
+      initialProviderType === "antigravity_oauth");
   const wasCodexOfficialManagedOauthBound =
     appId === "codex" &&
     Boolean(resolveManagedAccountId(initialData?.meta, "codex_oauth"));
@@ -1319,6 +1334,14 @@ function ProviderFormFull({
       );
       return;
     }
+    if (isAntigravityOauthProvider && !isAntigravityOauthAuthenticated) {
+      toast.error(
+        t("antigravityOauth.loginRequired", {
+          defaultValue: "请先登录 Google 账号",
+        }),
+      );
+      return;
+    }
 
     const selectedAccountExists = (
       accountId: string | null,
@@ -1343,6 +1366,11 @@ function ProviderFormFull({
     const selectedXaiAccountIsUsable = (accountId: string | null) =>
       accountId === null ||
       xaiOauthAccounts.some(
+        (account) => account.id === accountId && !account.requires_reauth,
+      );
+    const selectedAntigravityAccountIsUsable = (accountId: string | null) =>
+      accountId === null ||
+      antigravityOauthAccounts.some(
         (account) => account.id === accountId && !account.requires_reauth,
       );
     if (
@@ -1374,6 +1402,17 @@ function ProviderFormFull({
       toast.error(
         t("managedAuth.selectedAccountNeedsReauth", {
           defaultValue: "已绑定 xAI 账号不存在或需要重新登录",
+        }),
+      );
+      return;
+    }
+    if (
+      isAntigravityOauthProvider &&
+      !selectedAntigravityAccountIsUsable(selectedAntigravityAccountId)
+    ) {
+      toast.error(
+        t("managedAuth.selectedAccountNeedsReauth", {
+          defaultValue: "已绑定的 Antigravity 账号不存在或需要重新登录",
         }),
       );
       return;
@@ -1709,7 +1748,9 @@ function ProviderFormFull({
         ? "codex_oauth"
         : isXaiOauthProvider
           ? "xai_oauth"
-          : undefined;
+          : isAntigravityOauthProvider
+            ? "antigravity_oauth"
+            : undefined;
 
     const nextMeta: ProviderMeta = {
       ...(baseMeta ?? {}),
@@ -1749,7 +1790,13 @@ function ProviderFormFull({
                   authProvider: "xai_oauth",
                   accountId: selectedXaiAccountId ?? undefined,
                 }
-              : undefined,
+              : isAntigravityOauthProvider
+                ? {
+                    source: "managed_account",
+                    authProvider: "antigravity_oauth",
+                    accountId: selectedAntigravityAccountId ?? undefined,
+                  }
+                : undefined,
       // GitHub Copilot 多账号：保存关联的账号 ID
       githubAccountId:
         isCopilotProvider && selectedGitHubAccountId
@@ -2376,11 +2423,13 @@ function ProviderFormFull({
               isCopilotPreset={isCopilotProvider}
               isCodexOauthPreset={isClaudeCodexOauthProvider}
               isXaiOauthPreset={isXaiOauthProvider}
+              isAntigravityOauthPreset={isAntigravityOauthProvider}
               usesOAuth={
                 templatePreset?.requiresOAuth === true ||
                 isCopilotProvider ||
                 isClaudeCodexOauthProvider ||
-                isXaiOauthProvider
+                isXaiOauthProvider ||
+                isAntigravityOauthProvider
               }
               isCopilotAuthenticated={isCopilotAuthenticated}
               selectedGitHubAccountId={selectedGitHubAccountId}
@@ -2394,6 +2443,9 @@ function ProviderFormFull({
               isXaiOauthAuthenticated={isXaiOauthAuthenticated}
               selectedXaiAccountId={selectedXaiAccountId}
               onXaiAccountSelect={setSelectedXaiAccountId}
+              isAntigravityOauthAuthenticated={isAntigravityOauthAuthenticated}
+              selectedAntigravityAccountId={selectedAntigravityAccountId}
+              onAntigravityAccountSelect={setSelectedAntigravityAccountId}
               templateValueEntries={templateValueEntries}
               templateValues={templateValues}
               templatePresetName={templatePreset?.name || ""}

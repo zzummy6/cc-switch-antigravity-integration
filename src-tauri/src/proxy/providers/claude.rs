@@ -452,12 +452,32 @@ pub fn transform_claude_request_for_api_format(
             super::transform::inject_openai_stream_include_usage(&mut result);
             Ok(result)
         }
-        "gemini_native" => super::transform_gemini::anthropic_to_gemini_with_shadow(
-            body,
-            shadow_store,
-            Some(&provider.id),
-            session_id,
-        ),
+        "gemini_native" => {
+            let is_antigravity = provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                == Some("antigravity_oauth");
+            let model = super::transform_gemini::extract_gemini_model(&body)
+                .unwrap_or("unknown")
+                .to_string();
+            let gemini_body = super::transform_gemini::anthropic_to_gemini_with_shadow(
+                body,
+                shadow_store,
+                Some(&provider.id),
+                session_id,
+            )?;
+            if is_antigravity {
+                // Cloud Code v1internal 上游需要 {model, request, userPromptId} 信封
+                Ok(super::transform_gemini::wrap_gemini_body_for_cloudcode(
+                    gemini_body,
+                    &model,
+                    session_id,
+                ))
+            } else {
+                Ok(gemini_body)
+            }
+        }
         _ => Ok(body),
     }
 }
@@ -499,6 +519,10 @@ impl ClaudeAdapter {
             return ProviderType::XaiOAuth;
         }
 
+        if self.is_antigravity_oauth(provider) {
+            return ProviderType::AntigravityOAuth;
+        }
+
         // 检测 GitHub Copilot
         if self.is_github_copilot(provider) {
             return ProviderType::GitHubCopilot;
@@ -529,6 +553,14 @@ impl ClaudeAdapter {
 
     fn is_xai_oauth(&self, provider: &Provider) -> bool {
         provider.is_xai_oauth()
+    }
+
+    fn is_antigravity_oauth(&self, provider: &Provider) -> bool {
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth")
     }
 
     /// 检测是否为 GitHub Copilot 供应商
@@ -715,6 +747,11 @@ impl ProviderAdapter for ClaudeAdapter {
             return Ok(super::XAI_API_BASE_URL.to_string());
         }
 
+        // Antigravity OAuth: Cloud Code 上游固定，忽略用户配置的 base_url
+        if self.is_antigravity_oauth(provider) {
+            return Ok(super::ANTIGRAVITY_CLOUDCODE_BASE_URL.to_string());
+        }
+
         // 1. 从 env 中获取
         if let Some(env) = provider.settings_config.get("env") {
             if let Some(url) = env.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()) {
@@ -778,6 +815,15 @@ impl ProviderAdapter for ClaudeAdapter {
             return Some(AuthInfo::new(
                 "xai_oauth_placeholder".to_string(),
                 AuthStrategy::XaiOAuth,
+            ));
+        }
+
+        // Antigravity OAuth 同样使用占位符
+        // 实际的 access_token 由 AntigravityOAuthManager 动态提供
+        if provider_type == ProviderType::AntigravityOAuth {
+            return Some(AuthInfo::new(
+                "antigravity_oauth_placeholder".to_string(),
+                AuthStrategy::AntigravityOAuth,
             ));
         }
 
@@ -845,6 +891,17 @@ impl ProviderAdapter for ClaudeAdapter {
                 }
                 _ => format!("{}/responses", super::XAI_API_BASE_URL),
             };
+        }
+
+        // Antigravity: endpoint 已由 rewrite_claude_transform_endpoint 重写为
+        // `/v1internal:{generateContent,streamGenerateContent}[?alt=sse]`，
+        // 此处只做简单的拼接兜底。
+        if base_url == super::ANTIGRAVITY_CLOUDCODE_BASE_URL {
+            return format!(
+                "{}/{}",
+                base_url.trim_end_matches('/'),
+                endpoint.trim_start_matches('/')
+            );
         }
 
         // NOTE:
@@ -916,6 +973,10 @@ impl ProviderAdapter for ClaudeAdapter {
                 ]
             }
             AuthStrategy::XaiOAuth => {
+                vec![(HeaderName::from_static("authorization"), hv(&bearer)?)]
+            }
+            AuthStrategy::AntigravityOAuth => {
+                // bearer token 由 forwarder 动态注入到 auth.api_key
                 vec![(HeaderName::from_static("authorization"), hv(&bearer)?)]
             }
             AuthStrategy::GitHubCopilot => {
@@ -2024,6 +2085,116 @@ mod tests {
             "You are helpful."
         );
         assert_eq!(transformed["generationConfig"]["maxOutputTokens"], 64);
+    }
+
+    #[test]
+    fn test_transform_claude_request_for_api_format_antigravity_wraps_cloudcode() {
+        let provider = create_provider_with_meta(
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://cloudcode-pa.googleapis.com",
+                    "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+                }
+            }),
+            ProviderMeta {
+                api_format: Some("gemini_native".to_string()),
+                provider_type: Some("antigravity_oauth".to_string()),
+                ..Default::default()
+            },
+        );
+        let body = json!({
+            "model": "gemini-2.5-pro",
+            "system": "You are helpful.",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "max_tokens": 64
+        });
+
+        let transformed = transform_claude_request_for_api_format(
+            body,
+            &provider,
+            "gemini_native",
+            Some("sess-1"),
+            None,
+        )
+        .unwrap();
+
+        // Cloud Code 信封字段（外层）
+        assert_eq!(transformed["model"], "gemini-2.5-pro");
+        assert_eq!(transformed["userAgent"], "antigravity");
+        assert_eq!(transformed["requestType"], "agent");
+        let request_id = transformed["requestId"].as_str().unwrap();
+        assert!(request_id.starts_with("agent-"));
+        // 内层 request：sessionId 会话稳定（-<int> 形态）、Gemini 结构保留
+        let request = &transformed["request"];
+        assert!(request["sessionId"].as_str().unwrap().starts_with('-'));
+        assert!(request.get("contents").is_some());
+        assert_eq!(
+            request["systemInstruction"]["parts"][0]["text"],
+            "You are helpful."
+        );
+        assert_eq!(request["systemInstruction"]["role"], "user");
+        assert_eq!(request["generationConfig"]["maxOutputTokens"], 64);
+        // 外层不允许再出现 Gemini 顶层字段
+        assert!(transformed.get("contents").is_none());
+    }
+
+    #[test]
+    fn test_transform_claude_request_for_api_format_antigravity_claude_model_gets_validated() {
+        let provider = create_provider_with_meta(
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://cloudcode-pa.googleapis.com",
+                    "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+                }
+            }),
+            ProviderMeta {
+                api_format: Some("gemini_native".to_string()),
+                provider_type: Some("antigravity_oauth".to_string()),
+                ..Default::default()
+            },
+        );
+        let body = json!({
+            "model": "claude-sonnet-4-5",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": 8
+        });
+
+        let transformed = transform_claude_request_for_api_format(
+            body, &provider, "gemini_native", None, None,
+        )
+        .unwrap();
+
+        assert_eq!(transformed["request"]["toolConfig"]["functionCallingConfig"]["mode"], "VALIDATED");
+        // 超大 maxOutputTokens 被封顶
+    }
+
+    #[test]
+    fn test_transform_claude_request_for_api_format_antigravity_clamps_max_output_tokens() {
+        let provider = create_provider_with_meta(
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://cloudcode-pa.googleapis.com",
+                    "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+                }
+            }),
+            ProviderMeta {
+                api_format: Some("gemini_native".to_string()),
+                provider_type: Some("antigravity_oauth".to_string()),
+                ..Default::default()
+            },
+        );
+        let body = json!({
+            "model": "gemini-2.5-pro",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": 4294967295u64
+        });
+
+        let transformed = transform_claude_request_for_api_format(
+            body, &provider, "gemini_native", None, None,
+        )
+        .unwrap();
+
+        assert_eq!(transformed["request"]["generationConfig"]["maxOutputTokens"], 128_000);
     }
 
     #[test]

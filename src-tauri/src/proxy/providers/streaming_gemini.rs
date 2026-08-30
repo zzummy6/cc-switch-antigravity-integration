@@ -15,8 +15,21 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-fn map_finish_reason(reason: Option<&str>, has_tool_use: bool, blocked: bool) -> &'static str {
-    if blocked {
+/// Cloud Code (`v1internal`) SSE 事件把 GenerateContentResponse 包在
+/// `response` 字段里（`{"response":{...},"traceId":"..."}`），标准 Gemini
+/// SSE 则是顶层字段。两种形态在此归一化。
+fn unwrap_cloudcode_chunk(value: Value) -> Value {
+    if value.get("candidates").is_none() {
+        if let Some(inner) = value.get("response") {
+            if inner.is_object() {
+                return inner.clone();
+            }
+        }
+    }
+    value
+}
+
+fn map_finish_reason(reason: Option<&str>, has_tool_use: bool, blocked: bool) -> &'static str {    if blocked {
         return "refusal";
     }
 
@@ -285,7 +298,7 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                         }
 
                         let chunk_json: Value = match serde_json::from_str(&data) {
-                            Ok(value) => value,
+                            Ok(value) => unwrap_cloudcode_chunk(value),
                             Err(_) => continue,
                         };
 

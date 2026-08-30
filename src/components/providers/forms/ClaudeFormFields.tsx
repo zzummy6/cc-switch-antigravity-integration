@@ -34,6 +34,7 @@ import {
 import { CopilotAuthSection } from "./CopilotAuthSection";
 import { CodexOAuthSection } from "./CodexOAuthSection";
 import { XaiOAuthSection } from "./XaiOAuthSection";
+import { AntigravityOAuthSection } from "./AntigravityOAuthSection";
 import {
   copilotGetModels,
   copilotGetModelsForAccount,
@@ -105,6 +106,12 @@ interface ClaudeFormFieldsProps {
   isXaiOauthAuthenticated?: boolean;
   selectedXaiAccountId?: string | null;
   onXaiAccountSelect?: (accountId: string | null) => void;
+
+  // Antigravity OAuth
+  isAntigravityOauthPreset?: boolean;
+  isAntigravityOauthAuthenticated?: boolean;
+  selectedAntigravityAccountId?: string | null;
+  onAntigravityAccountSelect?: (accountId: string | null) => void;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -187,6 +194,9 @@ export function ClaudeFormFields({
   isXaiOauthAuthenticated,
   selectedXaiAccountId,
   onXaiAccountSelect,
+  isAntigravityOauthPreset,
+  selectedAntigravityAccountId,
+  onAntigravityAccountSelect,
   templateValueEntries,
   templateValues,
   templatePresetName,
@@ -682,6 +692,13 @@ export function ClaudeFormFields({
         <XaiOAuthSection
           selectedAccountId={selectedXaiAccountId}
           onAccountSelect={onXaiAccountSelect}
+        />
+      )}
+
+      {isAntigravityOauthPreset && (
+        <AntigravityOAuthSection
+          selectedAccountId={selectedAntigravityAccountId}
+          onAccountSelect={onAntigravityAccountSelect}
         />
       )}
 

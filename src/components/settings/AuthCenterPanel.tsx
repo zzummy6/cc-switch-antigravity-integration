@@ -7,6 +7,7 @@ import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSect
 import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
 import type { ManagedAuthProvider } from "@/lib/api";
 import { XaiOAuthSection } from "@/components/providers/forms/XaiOAuthSection";
+import { AntigravityOAuthSection } from "@/components/providers/forms/AntigravityOAuthSection";
 import { ProviderIcon } from "@/components/ProviderIcon";
 
 interface AuthCenterPanelProps {
@@ -18,6 +19,7 @@ export function AuthCenterPanel({ authScrollTarget }: AuthCenterPanelProps) {
   const copilotSectionRef = useRef<HTMLElement | null>(null);
   const codexOauthSectionRef = useRef<HTMLElement | null>(null);
   const xaiOauthSectionRef = useRef<HTMLElement | null>(null);
+  const antigravityOauthSectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!authScrollTarget) return;
@@ -27,6 +29,8 @@ export function AuthCenterPanel({ authScrollTarget }: AuthCenterPanelProps) {
         ? copilotSectionRef
         : authScrollTarget === "codex_oauth"
           ? codexOauthSectionRef
+          : authScrollTarget === "antigravity_oauth"
+          ? antigravityOauthSectionRef
           : xaiOauthSectionRef;
 
     const frame = requestAnimationFrame(() => {
@@ -130,6 +134,27 @@ export function AuthCenterPanel({ authScrollTarget }: AuthCenterPanelProps) {
         </div>
 
         <XaiOAuthSection />
+      </section>
+
+      <section
+        ref={antigravityOauthSectionRef}
+        className="scroll-mt-4 rounded-xl border border-border/60 bg-card/60 p-6"
+      >
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted">
+            <ProviderIcon icon="gemini" name="Antigravity" size={20} />
+          </div>
+          <div>
+            <h4 className="font-medium">Antigravity (Google)</h4>
+            <p className="text-sm text-muted-foreground">
+              {t("settings.authCenter.antigravityOauthDescription", {
+                defaultValue: "管理 Antigravity / Google 账号",
+              })}
+            </p>
+          </div>
+        </div>
+
+        <AntigravityOAuthSection />
       </section>
     </div>
   );

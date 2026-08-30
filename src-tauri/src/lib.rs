@@ -1170,6 +1170,20 @@ pub fn run() {
                 log::info!("✓ XaiOAuthManager initialized");
             }
 
+            // 初始化 Antigravity OAuthManager (Google Cloud Code 反代)
+            {
+                use crate::proxy::providers::antigravity_oauth_auth::AntigravityOAuthManager;
+                use commands::AntigravityOAuthState;
+                use tokio::sync::RwLock;
+
+                let app_config_dir = crate::config::get_app_config_dir();
+                let antigravity_oauth_manager = AntigravityOAuthManager::new(app_config_dir);
+                app.manage(AntigravityOAuthState(Arc::new(RwLock::new(
+                    antigravity_oauth_manager,
+                ))));
+                log::info!("✓ AntigravityOAuthManager initialized");
+            }
+
             // 初始化全局出站代理 HTTP 客户端
             {
                 let db = &app.state::<AppState>().db;
@@ -1441,6 +1455,7 @@ pub fn run() {
             commands::get_codex_oauth_models,
             commands::get_xai_oauth_models,
             commands::get_xai_oauth_quota,
+            commands::get_antigravity_oauth_models,
             commands::get_coding_plan_quota,
             commands::get_balance,
             // New MCP via config.json (SSOT)

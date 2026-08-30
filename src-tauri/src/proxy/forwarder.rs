@@ -22,7 +22,8 @@ use super::{
     types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
-use crate::commands::{CodexOAuthState, CopilotAuthState, XaiOAuthState};
+use crate::commands::{AntigravityOAuthState, CodexOAuthState, CopilotAuthState, XaiOAuthState};
+use crate::proxy::providers::antigravity_oauth_auth::AntigravityOAuthManager;
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
 use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
 use crate::{
@@ -38,6 +39,7 @@ use tauri::Manager;
 use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+const ANTIGRAVITY_USER_AGENT: &str = super::providers::ANTIGRAVITY_USER_AGENT;
 
 fn codex_bearer_access_token(headers: &http::HeaderMap) -> Option<&str> {
     let authorization = headers
@@ -1460,7 +1462,18 @@ impl RequestForwarder {
             let api_format = resolved_claude_api_format
                 .as_deref()
                 .unwrap_or_else(|| super::providers::get_claude_api_format(provider));
-            rewrite_claude_transform_endpoint(endpoint, api_format, is_copilot, &mapped_body)
+            let is_antigravity_oauth = provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                == Some("antigravity_oauth");
+            rewrite_claude_transform_endpoint(
+                endpoint,
+                api_format,
+                is_copilot,
+                &mapped_body,
+                is_antigravity_oauth,
+            )
         } else {
             (
                 endpoint.to_string(),
@@ -1484,7 +1497,13 @@ impl RequestForwarder {
         let is_codex_alpha_search = matches!(app_type, AppType::Codex)
             && split_endpoint_and_query(&effective_endpoint).0 == "/alpha/search";
 
-        let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
+        let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native"))
+            && provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.provider_type.as_deref())
+                != Some("antigravity_oauth")
+        {
             super::gemini_url::resolve_gemini_native_url(
                 &base_url,
                 &effective_endpoint,
@@ -1868,6 +1887,43 @@ impl RequestForwarder {
                 }
             }
 
+            // Antigravity OAuth: 在发请求前解析托管账号的 access_token。
+            // refresh_token 失效时由 manager 持久化 requires_reauth 状态。
+            if auth.strategy == AuthStrategy::AntigravityOAuth {
+                if let Some(app_handle) = &self.app_handle {
+                    let antigravity_state = app_handle.state::<AntigravityOAuthState>();
+                    let antigravity_auth: tokio::sync::RwLockReadGuard<'_, AntigravityOAuthManager> =
+                        antigravity_state.0.read().await;
+                    let account_id = provider
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| meta.managed_account_id_for("antigravity_oauth"));
+                    let token_result = match &account_id {
+                        Some(id) => antigravity_auth.get_valid_token_for_account(id).await,
+                        None => antigravity_auth.get_valid_token().await,
+                    };
+                    match token_result {
+                        Ok(token) => {
+                            auth = AuthInfo::new(token, AuthStrategy::AntigravityOAuth);
+                            log::debug!(
+                                "[AntigravityOAuth] 成功获取 access_token (account={})",
+                                account_id.as_deref().unwrap_or("default")
+                            );
+                        }
+                        Err(error) => {
+                            log::error!("[AntigravityOAuth] 获取 access_token 失败: {error}");
+                            return Err(ProxyError::AuthError(format!(
+                                "Antigravity OAuth 认证失败: {error}"
+                            )));
+                        }
+                    }
+                } else {
+                    return Err(ProxyError::AuthError(
+                        "Antigravity OAuth 认证不可用（无 AppHandle）".to_string(),
+                    ));
+                }
+            }
+
             for secret in std::iter::once(&auth.api_key).chain(auth.access_token.iter()) {
                 if !secret.is_empty() && !log_secrets.contains(secret) {
                     log_secrets.push(secret.clone());
@@ -1901,6 +1957,18 @@ impl RequestForwarder {
         // codex_cli_rs UA with the Claude Code UA.
         let custom_user_agent = if custom_user_agent.is_none() && codex_impersonate_claude_code {
             Some(http::HeaderValue::from_static(CLAUDE_CODE_USER_AGENT))
+        } else {
+            custom_user_agent
+        };
+        // Antigravity 上游按 antigravity/hub/<ver> 指纹识别客户端；未显式配置
+        // 自定义 UA 时注入默认指纹。
+        let is_antigravity_oauth = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.provider_type.as_deref())
+            == Some("antigravity_oauth");
+        let custom_user_agent = if custom_user_agent.is_none() && is_antigravity_oauth {
+            Some(http::HeaderValue::from_static(ANTIGRAVITY_USER_AGENT))
         } else {
             custom_user_agent
         };
@@ -3208,6 +3276,7 @@ fn rewrite_claude_transform_endpoint(
     api_format: &str,
     is_copilot: bool,
     body: &Value,
+    is_antigravity_oauth: bool,
 ) -> (String, Option<String>) {
     let (path, query) = split_endpoint_and_query(endpoint);
     let passthrough_query = if is_claude_messages_path(path) {
@@ -3218,6 +3287,28 @@ fn rewrite_claude_transform_endpoint(
 
     if !is_claude_messages_path(path) {
         return (endpoint.to_string(), passthrough_query);
+    }
+
+    if is_antigravity_oauth {
+        // Cloud Code v1internal：model 放在请求体里，URL 不含 model 段。
+        let is_stream = body
+            .get("stream")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let target_path = if is_stream {
+            "/v1internal:streamGenerateContent"
+        } else {
+            "/v1internal:generateContent"
+        };
+        let rewritten_query = merge_query_params(
+            passthrough_query.as_deref(),
+            if is_stream { Some("alt=sse") } else { None },
+        );
+        let rewritten = match rewritten_query.as_deref() {
+            Some(query) if !query.is_empty() => format!("{target_path}?{query}"),
+            _ => target_path.to_string(),
+        };
+        return (rewritten, rewritten_query);
     }
 
     if api_format == "gemini_native" {
@@ -4275,6 +4366,7 @@ mod tests {
             "openai_chat",
             false,
             &json!({ "model": "gpt-5.4" }),
+            false,
         );
 
         assert_eq!(endpoint, "/v1/chat/completions?foo=bar");
@@ -4288,6 +4380,7 @@ mod tests {
             "openai_responses",
             false,
             &json!({ "model": "gpt-5.4" }),
+            false,
         );
 
         assert_eq!(endpoint, "/v1/responses?x-id=1");
@@ -4675,6 +4768,7 @@ mod tests {
             "anthropic",
             true,
             &json!({ "model": "claude-sonnet-4-6" }),
+            false,
         );
 
         assert_eq!(endpoint, "/chat/completions?x-id=1");
@@ -4688,6 +4782,7 @@ mod tests {
             "openai_responses",
             true,
             &json!({ "model": "gpt-5.4" }),
+            false,
         );
 
         assert_eq!(endpoint, "/v1/responses?x-id=1");
@@ -4701,6 +4796,7 @@ mod tests {
             "gemini_native",
             false,
             &json!({ "model": "gemini-2.5-pro" }),
+            false,
         );
 
         assert_eq!(
@@ -4720,6 +4816,7 @@ mod tests {
             "gemini_native",
             false,
             &json!({ "model": "models/gemini-2.5-pro" }),
+            false,
         );
 
         assert_eq!(endpoint, "/v1beta/models/gemini-2.5-pro:generateContent");
@@ -4732,6 +4829,7 @@ mod tests {
             "gemini_native",
             false,
             &json!({ "model": "gemini-2.5-flash", "stream": true }),
+            false,
         );
 
         assert_eq!(

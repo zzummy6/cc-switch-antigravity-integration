@@ -1,9 +1,13 @@
 use tauri::State;
 
 use crate::app_config::AppType;
+use crate::commands::antigravity_oauth::AntigravityOAuthState;
 use crate::commands::codex_oauth::CodexOAuthState;
 use crate::commands::copilot::CopilotAuthState;
 use crate::commands::xai_oauth::XaiOAuthState;
+use crate::proxy::providers::antigravity_oauth_auth::{
+    AntigravityOAuthAccount, AntigravityOAuthError,
+};
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthError;
 use crate::proxy::providers::copilot_auth::{
     CopilotAuthError, GitHubAccount, GitHubDeviceCodeResponse,
@@ -14,6 +18,7 @@ use crate::store::AppState;
 const AUTH_PROVIDER_GITHUB_COPILOT: &str = "github_copilot";
 const AUTH_PROVIDER_CODEX_OAUTH: &str = "codex_oauth";
 const AUTH_PROVIDER_XAI_OAUTH: &str = "xai_oauth";
+const AUTH_PROVIDER_ANTIGRAVITY_OAUTH: &str = "antigravity_oauth";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ManagedAuthAccount {
@@ -54,6 +59,7 @@ fn ensure_auth_provider(auth_provider: &str) -> Result<&'static str, String> {
         AUTH_PROVIDER_GITHUB_COPILOT => Ok(AUTH_PROVIDER_GITHUB_COPILOT),
         AUTH_PROVIDER_CODEX_OAUTH => Ok(AUTH_PROVIDER_CODEX_OAUTH),
         AUTH_PROVIDER_XAI_OAUTH => Ok(AUTH_PROVIDER_XAI_OAUTH),
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => Ok(AUTH_PROVIDER_ANTIGRAVITY_OAUTH),
         _ => Err(format!("Unsupported auth provider: {auth_provider}")),
     }
 }
@@ -93,6 +99,23 @@ fn map_xai_account(
     }
 }
 
+fn map_antigravity_account(
+    account: AntigravityOAuthAccount,
+    default_account_id: Option<&str>,
+) -> ManagedAuthAccount {
+    ManagedAuthAccount {
+        is_default: default_account_id == Some(account.id.as_str()),
+        id: account.id,
+        provider: AUTH_PROVIDER_ANTIGRAVITY_OAUTH.to_string(),
+        login: account.login,
+        avatar_url: account.avatar_url,
+        authenticated_at: account.authenticated_at,
+        github_domain: account.github_domain,
+        reauth_required: false,
+        requires_reauth: account.requires_reauth,
+    }
+}
+
 fn map_device_code_response(
     provider: &str,
     response: GitHubDeviceCodeResponse,
@@ -115,6 +138,7 @@ pub async fn auth_start_login(
     copilot_state: State<'_, CopilotAuthState>,
     codex_state: State<'_, CodexOAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<ManagedAuthDeviceCodeResponse, String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -148,6 +172,17 @@ pub async fn auth_start_login(
                 .map_err(|e| e.to_string())?;
             Ok(map_device_code_response(auth_provider, response))
         }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            if target_account_id.is_some() {
+                return Err("Targeted re-authentication is only supported for Codex OAuth".into());
+            }
+            let auth_manager = antigravity_state.0.read().await;
+            let response = auth_manager
+                .start_login()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(map_device_code_response(auth_provider, response))
+        }
         _ => unreachable!(),
     }
 }
@@ -161,6 +196,7 @@ pub async fn auth_poll_for_account(
     copilot_state: State<'_, CopilotAuthState>,
     codex_state: State<'_, CodexOAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<Option<ManagedAuthAccount>, String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -213,6 +249,19 @@ pub async fn auth_poll_for_account(
                 Err(e) => Err(e.to_string()),
             }
         }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            let auth_manager = antigravity_state.0.read().await;
+            match auth_manager.poll_login(&device_code).await {
+                Ok(account) => {
+                    let default_account_id = auth_manager.get_status().await.default_account_id;
+                    Ok(account.map(|account| {
+                        map_antigravity_account(account, default_account_id.as_deref())
+                    }))
+                }
+                Err(AntigravityOAuthError::AuthorizationPending) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -236,6 +285,7 @@ pub async fn auth_list_accounts(
     copilot_state: State<'_, CopilotAuthState>,
     codex_state: State<'_, CodexOAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<Vec<ManagedAuthAccount>, String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -269,6 +319,16 @@ pub async fn auth_list_accounts(
                 .map(|account| map_xai_account(account, default_account_id.as_deref()))
                 .collect())
         }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            let auth_manager = antigravity_state.0.read().await;
+            let status = auth_manager.get_status().await;
+            let default_account_id = status.default_account_id.clone();
+            Ok(status
+                .accounts
+                .into_iter()
+                .map(|account| map_antigravity_account(account, default_account_id.as_deref()))
+                .collect())
+        }
         _ => unreachable!(),
     }
 }
@@ -279,6 +339,7 @@ pub async fn auth_get_status(
     copilot_state: State<'_, CopilotAuthState>,
     codex_state: State<'_, CodexOAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<ManagedAuthStatus, String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -334,6 +395,22 @@ pub async fn auth_get_status(
                     .collect(),
             })
         }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            let auth_manager = antigravity_state.0.read().await;
+            let status = auth_manager.get_status().await;
+            let default_account_id = status.default_account_id.clone();
+            Ok(ManagedAuthStatus {
+                provider: auth_provider.to_string(),
+                authenticated: status.authenticated,
+                default_account_id: default_account_id.clone(),
+                migration_error: None,
+                accounts: status
+                    .accounts
+                    .into_iter()
+                    .map(|account| map_antigravity_account(account, default_account_id.as_deref()))
+                    .collect(),
+            })
+        }
         _ => unreachable!(),
     }
 }
@@ -345,6 +422,7 @@ pub async fn auth_remove_account(
     app_state: State<'_, AppState>,
     copilot_state: State<'_, CopilotAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<(), String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -360,6 +438,13 @@ pub async fn auth_remove_account(
         }
         AUTH_PROVIDER_XAI_OAUTH => {
             let auth_manager = xai_state.0.write().await;
+            auth_manager
+                .remove_account(&account_id)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            let auth_manager = antigravity_state.0.write().await;
             auth_manager
                 .remove_account(&account_id)
                 .await
@@ -394,6 +479,7 @@ pub async fn auth_set_default_account(
     copilot_state: State<'_, CopilotAuthState>,
     codex_state: State<'_, CodexOAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<(), String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -418,6 +504,13 @@ pub async fn auth_set_default_account(
                 .await
                 .map_err(|e| e.to_string())
         }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            let auth_manager = antigravity_state.0.write().await;
+            auth_manager
+                .set_default_account(&account_id)
+                .await
+                .map_err(|e| e.to_string())
+        }
         _ => unreachable!(),
     }
 }
@@ -428,6 +521,7 @@ pub async fn auth_logout(
     app_state: State<'_, AppState>,
     copilot_state: State<'_, CopilotAuthState>,
     xai_state: State<'_, XaiOAuthState>,
+    antigravity_state: State<'_, AntigravityOAuthState>,
 ) -> Result<(), String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -438,6 +532,10 @@ pub async fn auth_logout(
         AUTH_PROVIDER_CODEX_OAUTH => logout_codex_oauth_with_switch_lock(app_state.inner()).await,
         AUTH_PROVIDER_XAI_OAUTH => {
             let auth_manager = xai_state.0.write().await;
+            auth_manager.clear_auth().await.map_err(|e| e.to_string())
+        }
+        AUTH_PROVIDER_ANTIGRAVITY_OAUTH => {
+            let auth_manager = antigravity_state.0.write().await;
             auth_manager.clear_auth().await.map_err(|e| e.to_string())
         }
         _ => unreachable!(),
