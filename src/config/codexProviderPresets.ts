@@ -1834,11 +1834,17 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     // 托管 OAuth：真实 token 由本地代理按请求注入，CodexAdapter 硬定向 daily
     // Cloud Code；这里的 base_url / 空 auth 只是配置快照，转发时不生效。
-    config: generateThirdPartyConfig(
-      "antigravity",
-      "https://daily-cloudcode-pa.googleapis.com",
-      "gemini-3-flash",
-    ),
+    // 注意：不能用 generateThirdPartyConfig —— 它生成的 requires_openai_auth = true
+    // 会触发切换预检的"官方凭据回退"安全门（本供应商凭据由代理注入，不落 auth.json）。
+    config: `model_provider = "custom"
+model = "gemini-3-flash"
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+[model_providers.custom]
+name = "antigravity"
+base_url = "https://daily-cloudcode-pa.googleapis.com"
+wire_api = "responses"`,
     // 组合链：Responses -> Anthropic -> Cloud Code（要求 anthropic wire 判定）
     apiFormat: "anthropic",
     providerType: "antigravity_oauth",
