@@ -48,6 +48,9 @@ pub struct ProxyState {
     pub app_handle: Option<tauri::AppHandle>,
     /// 故障转移切换管理器
     pub failover_manager: Arc<FailoverSwitchManager>,
+    /// Universal Gateway：session → (provider label, model) 亲和表（Phase 5）
+    pub universal_affinity:
+        Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
 }
 
 /// 代理HTTP服务器
@@ -60,6 +63,23 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
+    /// Universal Gateway 亲和表快照（命令层展示用）
+    pub async fn universal_affinity_snapshot(
+        &self,
+    ) -> std::collections::HashMap<String, (String, String)> {
+        self.state.universal_affinity.read().await.clone()
+    }
+
+    pub async fn clear_universal_affinity(&self, session_id: Option<&str>) {
+        let mut guard = self.state.universal_affinity.write().await;
+        match session_id {
+            Some(session) => {
+                guard.remove(session);
+            }
+            None => guard.clear(),
+        }
+    }
+
     pub fn new(
         config: ProxyConfig,
         db: Arc<Database>,
@@ -81,6 +101,7 @@ impl ProxyServer {
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle,
             failover_manager,
+            universal_affinity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         };
 
         Self {

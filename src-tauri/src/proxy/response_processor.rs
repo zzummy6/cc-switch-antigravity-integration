@@ -1030,6 +1030,7 @@ mod tests {
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle: None,
             failover_manager: Arc::new(FailoverSwitchManager::new(db)),
+        universal_affinity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 

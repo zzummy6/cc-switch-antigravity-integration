@@ -200,6 +200,10 @@ async fn handle_messages_for_app(
         .unwrap_or(false);
 
     // 转发请求
+    // Universal Gateway（Phase 5）：请求级路由覆盖 GUI current provider
+    let mut body = body;
+    ctx.apply_universal_route(&state, &mut body).await;
+
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
@@ -787,6 +791,10 @@ pub async fn handle_chat_completions(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // Universal Gateway（Phase 5）：请求级路由覆盖 GUI current provider
+    let mut body = body;
+    ctx.apply_universal_route(&state, &mut body).await;
+
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
@@ -881,6 +889,10 @@ async fn handle_responses_for_app(
     // {namespace, name} map used to restore the native Responses upstream's
     // function-call names (see the namespace-restore dispatch below).
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
+
+    // Universal Gateway（Phase 5）：请求级路由覆盖 GUI current provider
+    let mut body = body;
+    ctx.apply_universal_route(&state, &mut body).await;
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -1037,6 +1049,10 @@ pub async fn handle_alpha_search(
         RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, "/alpha/search");
 
+    // Universal Gateway（Phase 5）：请求级路由覆盖 GUI current provider
+    let mut body = body;
+    ctx.apply_universal_route(&state, &mut body).await;
+
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
@@ -1119,6 +1135,10 @@ async fn handle_responses_compact_for_app(
         .unwrap_or(false);
     let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
+
+    // Universal Gateway（Phase 5）：请求级路由覆盖 GUI current provider
+    let mut body = body;
+    ctx.apply_universal_route(&state, &mut body).await;
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -2128,6 +2148,10 @@ pub async fn handle_gemini(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    // Universal Gateway（Phase 5）：请求级路由覆盖 GUI current provider
+    let mut body = body;
+    ctx.apply_universal_route(&state, &mut body).await;
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder

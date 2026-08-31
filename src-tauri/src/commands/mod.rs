@@ -29,6 +29,7 @@ pub mod skill;
 mod stream_check;
 mod antigravity_oauth;
 mod subscription;
+mod universal;
 mod sync_support;
 mod xai_oauth;
 
@@ -66,6 +67,7 @@ pub use settings::*;
 pub use skill::*;
 pub use antigravity_oauth::*;
 pub use stream_check::*;
+pub use universal::*;
 pub use subscription::*;
 pub use xai_oauth::*;
 

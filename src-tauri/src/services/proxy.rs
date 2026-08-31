@@ -3848,6 +3848,22 @@ impl ProxyService {
     // ==================== 原有方法 ====================
 
     /// 获取服务器状态
+    /// Universal Gateway（Phase 5）：亲和表快照
+    pub async fn universal_affinity_snapshot(
+        &self,
+    ) -> std::collections::HashMap<String, (String, String)> {
+        match self.server.read().await.as_ref() {
+            Some(server) => server.universal_affinity_snapshot().await,
+            None => Default::default(),
+        }
+    }
+
+    pub async fn clear_universal_affinity(&self, session_id: Option<&str>) {
+        if let Some(server) = self.server.read().await.as_ref() {
+            server.clear_universal_affinity(session_id).await;
+        }
+    }
+
     pub async fn get_status(&self) -> Result<ProxyStatus, String> {
         if let Some(server) = self.server.read().await.as_ref() {
             Ok(server.get_status().await)

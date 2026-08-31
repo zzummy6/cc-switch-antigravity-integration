@@ -191,6 +191,65 @@ impl RequestContext {
         self
     }
 
+    /// Universal Gateway（Phase 5）：请求级 provider 路由。
+    ///
+    /// 从 model 字段解析 `provider/model` 前缀 / 别名 / 注册表命中；
+    /// 命中则替换本请求的 provider 链为合成 Provider（客户端协议形状），
+    /// 并把 body.model 重写为裸上游模型。未命中保持 GUI current 行为。
+    /// 永不报错——路由失败静默回退（客户端兼容优先）。
+    pub async fn apply_universal_route(&mut self, state: &ProxyState, body: &mut serde_json::Value) {
+        let model = self.request_model.clone();
+        if model == "unknown" || model.is_empty() {
+            return;
+        }
+        let registry = super::model_registry::cached_registry(state.db.as_ref());
+        let affinity_label = if self.session_client_provided {
+            super::model_registry::affinity_label(
+                state.universal_affinity.as_ref(),
+                &self.session_id,
+            )
+        } else {
+            None
+        };
+        let Some(decision) = super::model_registry::resolve(
+            &registry,
+            self.app_type_str,
+            &model,
+            affinity_label.as_deref(),
+        ) else {
+            return;
+        };
+
+        // 命中：合成 provider 并接管本请求的转发链（显式路由不参与 failover）
+        let synthesized =
+            super::model_registry::synthesize_provider(self.app_type_str, &decision);
+        log::info!(
+            "[{}] Universal route: {} → provider {} (upstream model {})",
+            self.tag,
+            model,
+            decision.route.provider_name,
+            decision.upstream_model
+        );
+        if let Some(label) = decision.matched_label.as_deref() {
+            if self.session_client_provided {
+                super::model_registry::record_affinity(
+                    state.universal_affinity.as_ref(),
+                    &self.session_id,
+                    label,
+                    &model,
+                );
+            }
+        }
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "model".to_string(),
+                serde_json::Value::String(decision.upstream_model.clone()),
+            );
+        }
+        self.provider = synthesized.clone();
+        self.providers = vec![synthesized];
+    }
+
     /// 创建 RequestForwarder
     ///
     /// 使用共享的 ProviderRouter，确保熔断器状态跨请求保持

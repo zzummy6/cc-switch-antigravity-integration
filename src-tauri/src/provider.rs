@@ -489,6 +489,13 @@ pub struct ProviderMeta {
     /// 新代码应只写入该字段；githubAccountId 仅保留兼容读取。
     #[serde(rename = "authBinding", skip_serializing_if = "Option::is_none")]
     pub auth_binding: Option<AuthBinding>,
+    /// Universal Gateway 路由别名（`alias/model` 里的 alias，追加于名称词之外）
+    #[serde(
+        default,
+        rename = "routingAliases",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub routing_aliases: Option<Vec<String>>,
     /// Claude 认证字段名（"ANTHROPIC_AUTH_TOKEN" 或 "ANTHROPIC_API_KEY"）
     #[serde(rename = "apiKeyField", skip_serializing_if = "Option::is_none")]
     pub api_key_field: Option<String>,

@@ -16,6 +16,11 @@ export { sessionsApi } from "./sessions";
 export { workspaceApi } from "./workspace";
 export * as configApi from "./config";
 export * as authApi from "./auth";
+export * as universalApi from "./universal";
+export type {
+  UniversalStatusResult,
+  UniversalRouteEntry,
+} from "./universal";
 export * as copilotApi from "./copilot";
 export type { ProviderSwitchEvent } from "./providers";
 export type { Prompt } from "./prompts";

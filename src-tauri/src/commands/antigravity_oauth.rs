@@ -64,7 +64,7 @@ fn parse_available_models(payload: &Value) -> Vec<AntigravityModel> {
         })
         .unwrap_or_default();
 
-    let mut push_model = |models: &mut Vec<AntigravityModel>,
+    let push_model = |models: &mut Vec<AntigravityModel>,
                           id: String,
                           entry: Option<&Value>| {
         let id = id.strip_prefix("models/").unwrap_or(&id).trim().to_string();
