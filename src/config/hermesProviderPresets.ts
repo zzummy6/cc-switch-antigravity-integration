@@ -1682,4 +1682,27 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
       model: { default: "claude-fable-5", provider: "jiekou" },
     },
   },
+  {
+    name: "Antigravity (Google)",
+    websiteUrl: "https://antigravity.google",
+    settingsConfig: {
+      name: "antigravity",
+      // 统一网关：复用 claude 命名空间（/claude/v1/messages），
+      // 凭据由 cc-switch 的 Antigravity OAuth 按请求注入，此处占位。
+      base_url: "http://127.0.0.1:15721/claude",
+      api_key: "PROXY_MANAGED",
+      api_mode: "anthropic_messages",
+      models: [
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { id: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro Low" },
+        { id: "gemini-3-flash", name: "Gemini 3 Flash" },
+      ],
+    },
+    category: "third_party",
+    icon: "gemini",
+    iconColor: "#1a73e8",
+    suggestedDefaults: {
+      model: { default: "claude-sonnet-4-6", provider: "antigravity" },
+    },
+  },
 ];

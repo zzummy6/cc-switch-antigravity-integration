@@ -27,6 +27,7 @@ import { BasicFormFields } from "./BasicFormFields";
 import { CodexOAuthSection } from "./CodexOAuthSection";
 import { CopilotAuthSection } from "./CopilotAuthSection";
 import { XaiOAuthSection } from "./XaiOAuthSection";
+import { AntigravityOAuthSection } from "./AntigravityOAuthSection";
 import { ApiKeySection } from "./shared/ApiKeySection";
 import { EndpointField } from "./shared/EndpointField";
 import { ModelDropdown } from "./shared/ModelDropdown";
@@ -274,6 +275,8 @@ export function ClaudeDesktopProviderForm({
   const [selectedCodexAccountId, setSelectedCodexAccountId] = useState<
     string | null
   >(() => resolveManagedAccountId(initialData?.meta, "codex_oauth"));
+  const [selectedAntigravityAccountId, setSelectedAntigravityAccountId] =
+    useState<string | null>(null);
   const [selectedXaiAccountId, setSelectedXaiAccountId] = useState<
     string | null
   >(() => resolveManagedAccountId(initialData?.meta, "xai_oauth"));
@@ -803,7 +806,13 @@ export function ClaudeDesktopProviderForm({
                 authProvider: "xai_oauth",
                 accountId: selectedXaiAccountId ?? undefined,
               }
-            : undefined;
+            : activeProviderType === "antigravity_oauth"
+              ? {
+                  source: "managed_account",
+                  authProvider: "antigravity_oauth",
+                  accountId: selectedAntigravityAccountId ?? undefined,
+                }
+              : undefined;
     meta.codexFastMode =
       activeProviderType === "codex_oauth" ? codexFastMode : undefined;
 
@@ -911,6 +920,11 @@ export function ClaudeDesktopProviderForm({
                     }
                     fastModeEnabled={codexFastMode}
                     onFastModeChange={setCodexFastMode}
+                  />
+                ) : activeProviderType === "antigravity_oauth" ? (
+                  <AntigravityOAuthSection
+                    selectedAccountId={selectedAntigravityAccountId}
+                    onAccountSelect={setSelectedAntigravityAccountId}
                   />
                 ) : (
                   <XaiOAuthSection

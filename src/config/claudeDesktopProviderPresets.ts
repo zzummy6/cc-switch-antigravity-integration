@@ -56,7 +56,7 @@ export interface ClaudeDesktopProviderPreset {
   mode: "direct" | "proxy";
   apiFormat?: ClaudeDesktopApiFormat;
   modelRoutes?: ClaudeDesktopRoutePreset[];
-  providerType?: "github_copilot" | "codex_oauth" | "xai_oauth";
+  providerType?: "github_copilot" | "codex_oauth" | "xai_oauth" | "antigravity_oauth";
   requiresOAuth?: boolean;
 
   endpointCandidates?: string[];
@@ -840,6 +840,24 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     ),
     icon: "github",
     iconColor: "#000000",
+  },
+  {
+    name: "Antigravity (Google)",
+    websiteUrl: "https://antigravity.google",
+    category: "third_party",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    mode: "proxy",
+    // gemini_native + 托管 OAuth：走本地网关的 Cloud Code 转换（与 Claude Code 同路径）
+    apiFormat: "gemini_native",
+    providerType: "antigravity_oauth",
+    requiresOAuth: true,
+    modelRoutes: mappedRoutes(
+      "claude-sonnet-4-6",
+      "gemini-3.1-pro-low",
+      "gemini-3-flash",
+    ),
+    icon: "gemini",
+    iconColor: "#1a73e8",
   },
   {
     name: "Codex",
